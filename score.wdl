@@ -1,15 +1,15 @@
 version development
 
-## Copyright (c) 2021-2022 Giulio Genovese
+## Copyright (c) 2021-2023 Giulio Genovese
 ##
-## Version 2022-12-21
+## Version 2023-09-19
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow computes poligenic risk scores
 ##
 ## Cromwell version support
-## - Successfully tested on v84
+## - Successfully tested on v85
 ##
 ## Distributed under terms of the MIT License
 
@@ -44,8 +44,8 @@ workflow score {
     String? include_str
     String basic_bash_docker = "debian:stable-slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.16-20221221"
-    String r_mocha_docker = "r_mocha:1.16-20221221"
+    String bcftools_docker = "bcftools:1.17-20230919"
+    String r_mocha_docker = "r_mocha:1.17-20230919"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -64,12 +64,13 @@ workflow score {
   Int n_batches = length(impute_tsv)-1
   scatter (idx in range(n_batches)) { Array[String] impute_tsv_rows = impute_tsv[(idx+1)] }
   Map[String, Array[String]] impute_tbl = as_map(zip(impute_tsv[0], transpose(impute_tsv_rows)))
+  # check if path is in impute table (see https://github.com/openwdl/wdl/issues/305)
+  Boolean is_path_in_impute_tbl = length(collect_by_key(zip(flatten([keys(impute_tbl),["path"]]),range(length(keys(impute_tbl))+1)))["path"])>1
 
-  # compute data paths for each batch, if available (scatter could be avoided if there was a contains_key() function)
-  scatter (key in keys(impute_tbl)) { Boolean? is_key_equal_path = if key == "path" then true else None }
+  # compute data paths for each batch
   scatter (idx in range(n_batches)) {
     String impute_data_paths_with_sep = (if defined(impute_data_path) then sub(select_first([impute_data_path]), "/$", "") + "/" else "") +
-                                        (if length(select_all(is_key_equal_path))>0 then sub(impute_tbl["path"][idx], "/$", "") + "/" else "")
+                                        (if is_path_in_impute_tbl then sub(impute_tbl["path"][idx], "/$", "") + "/" else "")
   }
 
   Array[Array[String]] ref_fasta_fai_tbl = transpose(read_tsv(ref.fasta_fai))
@@ -102,42 +103,19 @@ workflow score {
     }
   }
 
-  if (!defined(region)) {
-    Map[Int, Array[File]] idx2score_files = collect_by_key(zip(batch_idx, vcf_score.file))
-    scatter (idx in range(n_batches)) {
-      call score_summary {
-        input:
-          score_files = idx2score_files[idx],
-          filebase = sample_set_id + (if n_batches > 1 then "." + impute_tbl["batch_id"][idx] else "") + "." + ext_string,
-          docker = basic_bash_docker
-      }
-    }
-    File score_summary_file = score_summary.file[0]
-  }
-
-  if (n_batches > 1) {
-    call tsv_concat {
-      input:
-        tsv_files = select_first([score_summary.file, vcf_score.file]),
-        filebase = sample_set_id + "." + ext_string,
-        docker = basic_bash_docker
-    }
-  }
-
-  if (defined(covar_tsv_file)) {
-    call adj_scores {
-      input:
-        score_tsv_file = score_tsv_file,
-        covar_tsv_file = select_first([covar_tsv_file]),
-        sample_header = sample_header,
-        filebase = sample_set_id + "." + "adj_" + ext_string,
-        docker = docker_repository_with_sep + r_mocha_docker
-    }
+  call score_summary {
+    input:
+      score_files = vcf_score.file,
+      covar_tsv_file = covar_tsv_file,
+      sample_header = sample_header,
+      filebase = sample_set_id,
+      ext_string = ext_string,
+      docker = if defined(covar_tsv_file) then docker_repository_with_sep + r_mocha_docker else basic_bash_docker
   }
 
   output {
-    File score_tsv_file = select_first([tsv_concat.file, score_summary_file, vcf_score.file[0]])
-    File? adj_score_tsv_file = adj_scores.file
+    File score_tsv_file = score_summary.file
+    File? adj_score_tsv_file = score_summary.adj_file
   }
 
   meta {
@@ -217,7 +195,10 @@ task vcf_score {
 task score_summary {
   input {
     Array[File]+ score_files
+    File? covar_tsv_file
+    String sample_header
     String filebase
+    String ext_string
 
     String docker
     Int cpu = 1
@@ -235,6 +216,7 @@ task score_summary {
     set -euo pipefail
     score_files=~{write_lines(score_files)}
     cat - $score_files | tr '\n' '\0' | xargs -0 mv -t .
+    ~{if defined(covar_tsv_file) then "mv \"" + select_first([covar_tsv_file]) + "\" ." else ""}
     cat $score_files | sed 's/^.*\///' | tr '\n' '\0' | xargs -0 cat | \
       awk 'NR==1 {sample_header=$1}
       {if ($1==sample_header) {
@@ -265,116 +247,34 @@ task score_summary {
             printf "\t%f",v[cols[i]"~"rows[j]];
           printf "\n";
         }
-      }' > "~{filebase}.tsv"
+      }' > "~{filebase}.~{ext_string}.tsv"
+    ~{if defined(covar_tsv_file) then
+    "R --vanilla <<CODE\n" +
+    "library(data.table)\n" +
+    "df_scores <- fread('" + filebase + "." + ext_string + ".tsv', sep = \"\\t\", header = TRUE, data.table = FALSE)\n" +
+    "df_covars <- fread('" + basename(select_first([covar_tsv_file])) + "', sep = \"\\t\", header = TRUE, data.table = FALSE)\n" +
+    "df <- merge(df_scores, df_covars, by = '" + sample_header + "')\n" +
+    "df_adj <- data.frame(" + sample_header + " = df[, '" + sample_header + "'])\n" +
+    "scores <- names(df_scores)\n" +
+    "scores <- scores[scores != '" + sample_header + "']\n" +
+    "covars <- names(df_covars)\n" +
+    "covars <- covars[covars != '" + sample_header + "']\n" +
+    "bt <- rawToChar(as.raw(96))\n" +
+    "for (score in scores) {\n" +
+    "  formula <- paste0(bt, score, bt, ' ~ ', bt, paste(covars, collapse = paste(bt, '+', bt)), bt)\n" +
+    "  fit <- lm(formula, df)\n" +
+    "  df_adj[, paste0('adj_', score)] <- df[, score] - predict(fit, df)\n" +
+    "  df_adj[, paste0('adj_', score)] <- df_adj[, paste0('adj_', score)] / sd(df_adj[, paste0('adj_', score)])\n" +
+    "}\n" +
+    "write.table(df_adj, '" + filebase + ".adj_" + ext_string + ".tsv', sep = '\t', quote = FALSE, row.names = FALSE)\n" +
+    "CODE" else ""}
     cat - $score_files | sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm
+    ~{if defined(covar_tsv_file) then "rm \"" + basename(select_first([covar_tsv_file])) + "\"" else ""}
   >>>
 
   output {
-    File file = filebase + ".tsv"
-  }
-
-  runtime {
-    docker: docker
-    cpu: cpu
-    disks: "local-disk " + disk_size + " HDD"
-    memory: memory + " GiB"
-    preemptible: preemptible
-    maxRetries: maxRetries
-  }
-}
-
-task tsv_concat {
-  input {
-    Array[File]+ tsv_files
-    String filebase
-
-    String docker
-    Int cpu = 1
-    Int? disk_size_override
-    Float memory = 3.5
-    Int preemptible = 1
-    Int maxRetries = 0
-  }
-
-  Float tsv_size = size(tsv_files, "GiB")
-  Int disk_size = select_first([disk_size_override, ceil(10.0 + 2.0 * tsv_size)])
-
-  command <<<
-    set -euo pipefail
-    tsv_files=~{write_lines(tsv_files)}
-    ~{if length(tsv_files) > 1 then
-    "cat $tsv_files | tr '\\n' '\\0' | xargs -0 mv -t .\n" +
-    "sed -i 's/^.*\\///' $tsv_files\n" +
-    "(head -n1 \"" + basename(tsv_files[0]) + "\";\n" +
-    "cat $tsv_files | tr '\\n' '\\0' | xargs -0 tail -qn+2) > \"" + filebase + ".tsv\"\n" +
-    "cat $tsv_files | tr '\\n' '\\0' | xargs -0 rm"
-    else "mv \"" + tsv_files[0] + "\" \"" + filebase + ".tsv\""}
-  >>>
-
-  output {
-    File file = filebase + ".tsv"
-  }
-
-  runtime {
-    docker: docker
-    cpu: cpu
-    disks: "local-disk " + disk_size + " HDD"
-    memory: memory + " GiB"
-    preemptible: preemptible
-    maxRetries: maxRetries
-  }
-}
-
-task adj_scores {
-  input {
-    File score_tsv_file
-    File covar_tsv_file
-    String sample_header
-    String pfx_string = "adj_"
-    String filebase
-
-    String docker
-    Int cpu = 1
-    Int? disk_size_override
-    Float? memory_override
-    Int preemptible = 1
-    Int maxRetries = 0
-  }
-
-  Float scores_size = size(score_tsv_file, "GiB")
-  Float covars_size = size(covar_tsv_file, "GiB")
-  Int disk_size = select_first([disk_size_override, ceil(10.0 + 2.0 * scores_size + covars_size)])
-  Float memory = select_first([memory_override, 3.5 + 3.0 * scores_size + 2.0 * covars_size])
-
-  command <<<
-    set -euo pipefail
-    mv "~{score_tsv_file}" .
-    mv "~{covar_tsv_file}" .
-    R --vanilla <<CODE
-    library(data.table)
-    df_scores <- fread('~{basename(score_tsv_file)}', sep = "\t", header = TRUE, data.table = FALSE)
-    df_covars <- fread('~{basename(covar_tsv_file)}', sep = "\t", header = TRUE, data.table = FALSE)
-    df <- merge(df_scores, df_covars, by = '~{sample_header}')
-    df_adj <- data.frame(~{sample_header} = df[, '~{sample_header}'])
-    scores <- names(df_scores)
-    scores <- scores[scores != '~{sample_header}']
-    covars <- names(df_covars)
-    covars <- covars[covars != '~{sample_header}']
-    bt <- rawToChar(as.raw(96))
-    for (score in scores) {
-      formula <- paste0(bt, score, bt, ' ~ ', bt, paste(covars, collapse = paste(bt, '+', bt)), bt)
-      fit <- lm(formula, df)
-      df_adj[, paste0('~{pfx_string}', score)] <- df[, score] - predict(fit, df)
-      df_adj[, paste0('~{pfx_string}', score)] <- df_adj[, paste0('~{pfx_string}', score)] / sd(df_adj[, paste0('~{pfx_string}', score)])
-    }
-    write.table(df_adj, '~{filebase}.tsv', sep = '\t', quote = FALSE, row.names = FALSE)
-    CODE
-    rm "~{basename(score_tsv_file)}"
-    rm "~{basename(covar_tsv_file)}"
-  >>>
-
-  output {
-    File file = filebase + ".tsv"
+    File file = filebase + "." + ext_string + ".tsv"
+    File? adj_file = if defined(covar_tsv_file) then filebase + ".adj_" + ext_string + ".tsv" else None
   }
 
   runtime {

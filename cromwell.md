@@ -148,7 +148,7 @@ $ slurmd -C
 ```
 The output will provide an output such as:
 ```
-NodeName=localhost CPUs=8 Boards=1 SocketsPerBoard=1 CoresPerSocket=4 ThreadsPerCore=2 RealMemory=7445
+NodeName=localhost CPUs=8 Boards=1 SocketsPerBoard=1 CoresPerSocket=4 ThreadsPerCore=2 RealMemory=7419
 ```
 that will be needed for the SLURM configuration file
 
@@ -174,7 +174,7 @@ AccountingStorageType=accounting_storage/none
 JobAcctGatherType=jobacct_gather/linux
 SlurmctldLogFile=/var/log/slurm/slurmctld.log
 SlurmdLogFile=/var/log/slurm/slurmd.log
-NodeName=localhost CPUs=8 Boards=1 SocketsPerBoard=1 CoresPerSocket=4 ThreadsPerCore=2 RealMemory=7445 State=UNKNOWN
+NodeName=localhost CPUs=8 Boards=1 SocketsPerBoard=1 CoresPerSocket=4 ThreadsPerCore=2 RealMemory=7419 State=UNKNOWN
 PartitionName=localpartition Nodes=ALL Default=YES MaxTime=INFINITE State=UP
 EOF
 ```
@@ -210,7 +210,7 @@ PARTITION       AVAIL  TIMELIMIT   JOB_SIZE ROOT OVERSUBS     GROUPS  NODES     
 localpartition*    up   infinite 1-infinite   no       NO        all      1        idle localhost
 %a %b %d %H:%M:%S %Y
 NODELIST   NODES       PARTITION       STATE CPUS    S:C:T MEMORY TMP_DISK WEIGHT AVAIL_FE REASON
-localhost      1 localpartition*        idle 8       1:4:2   7445        0      1   (null) none
+localhost      1 localpartition*        idle 8       1:4:2   7419        0      1   (null) none
 ```
 If instead of **idle** you see **drained**, then you can restore the node with the command:
 ```
@@ -220,19 +220,21 @@ $ sudo scontrol update nodename=localhost state=resume
 Singularity
 -----------
 
-Cromwell supports Dockers but often it is not possible to run Dockers on a shared filesystem. Fortunately it is possible to use [Singularity](https://sylabs.io) as an alternative containerization system. On a Debian machine this can be installed with:
+By default Cromwell relies on Dockers but often it is not possible to run Dockers on a shared filesystem. Fortunately it is possible to use [Singularity](https://sylabs.io) as an alternative containerization system. This is provided by Debian/Ubuntu package [singularity-container](https://packages.debian.org/search?keywords=singularity-container) which can be installed either with:
+
+On a Debian machine this can be installed with:
 ```
 $ sudo apt update && sudo apt install singularity-container
 ```
-While on an Ubuntu machine it can be installed as follows:
+Or, if the previous does not work, with:
 ```
-$ wget http://ftp.us.debian.org/debian/pool/main/s/singularity-container/singularity-container_3.10.2+ds2-3+b1_amd64.deb
-$ sudo apt update && sudo apt install ./singularity-container_3.10.2+ds2-3+b1_amd64.deb
+$ wget http://ftp.us.debian.org/debian/pool/main/s/singularity-container/singularity-container_3.11.0+ds1-1+b6_amd64.deb
+$ sudo apt update && sudo apt install ./singularity-container_3.11.0+ds1-1+b6_amd64.deb
 ```
 Alternatively, if you would rather use [Apptainer](https://apptainer.org), you can use this command instead:
 ```
-$ wget https://github.com/apptainer/apptainer/releases/download/v1.0.3/apptainer_1.0.3_amd64.deb
-$ sudo apt update && sudo apt install ./apptainer_1.0.3_amd64.deb
+$ wget https://github.com/apptainer/apptainer/releases/download/v1.1.8/apptainer_1.1.8_amd64.deb
+$ sudo apt update && sudo apt install ./apptainer_1.1.8_amd64.deb
 ```
 
 When you run Cromwell with an HPC backend, it is possible to download the Dockers with Singularity when they are needed. If you are running Cromwell in a computational environment that does not have internet access, you might have to download the images manually. You can do so with the following command on a node that has internet access:
@@ -243,7 +245,7 @@ if [ -z $SINGULARITY_CACHEDIR ];
 fi
 mkdir -p $CACHE_DIR
 DOCKER_REPOSITORY=us.gcr.io/mccarroll-mocha
-DOCKER_TAG=1.16-20221221
+DOCKER_TAG=1.17-20230919
 for docker in debian:stable-slim amancevice/pandas:slim \
   DOCKER_REPOSITORY/{bcftools,autoconvert,iaap_cli,apt,r_mocha,eagle,shapeit4,impute5,beagle5,regenie}:$DOCKER_TAG; do
   DOCKER_NAME=$(sed -e 's/[^A-Za-z0-9._-]/_/g' <<< ${docker})
@@ -368,6 +370,7 @@ backend {
         String? docker
         """
 
+        script-epilogue = "sleep 5 && sync"
         submit-docker = """
         # Make sure the SINGULARITY_CACHEDIR variable is set. If not use a default
         # based on the users home.
@@ -387,16 +390,17 @@ backend {
         # Submit the script to SLURM
         sbatch \
           --wait \
-          -J ${job_name} \
+          -J=${job_name} \
           -D ${cwd} \
-          -o ${cwd}/execution/stdout \
-          -e ${cwd}/execution/stderr \
+          -o ${out}.sbatch \
+          -e ${err}.sbatch \
           -t ${runtime_minutes} \
           -c ${cpu} \
           --mem=${memory_mb} \
           --wrap "singularity exec --containall --bind ${cwd}:${docker_cwd} docker://${docker} ${job_shell} ${docker_script}"
         """
         kill-docker = "scancel ${job_id}"
+        exit-code-timeout-seconds = 360
         check-alive = "squeue -j ${job_id} || if [[ $? -eq 5004 ]]; then true; else exit $?; fi"
         job-id-regex = "Submitted batch job (\\d+).*"
       }
@@ -415,9 +419,9 @@ IMAGE=$CACHE_DIR/$DOCKER_NAME.sif
 ```
 Making sure the Docker images were manually copied in the `$CACHE_DIR` and then replace `docker://${docker}` with `$IMAGE`. The code within the `submit-docker` section will be included in the `script.submit` file that will be located in the `execution` directory of each task
 
-The **filesystems** sub-stanza will instruct Cromwell to activate [fingerprint](https://cromwell.readthedocs.io/en/stable/Configuring/#call-cache-strategy-options-for-local-filesystem) if you are planning to activate CallCaching. This is imperative as on shared filesystems hashes have to be recalculated every time they are requested and this can quickly bring the filesystem down if you are computing hashes of a large number of files. Failure to do so will inevitably lead to **Futures Timed Out** errors when Cromwell is configured with CallCaching
+The **filesystems** sub-stanza will instruct Cromwell to activate [fingerprint](https://cromwell.readthedocs.io/en/stable/Configuring/#call-cache-strategy-options-for-local-filesystem) if you are planning to activate CallCaching. This is imperative as on shared filesystems hashes have to be recalculated every time they are requested and this can quickly bring the filesystem down if you are computing hashes of a large number of files. Failure to do so will inevitably lead to **Future Timed Out** or **Futures Timed Out** errors when Cromwell is configured with CallCaching. It is possible that for jobs with many tasks run at once you might still get these type of errors. While the same job can then be restarted using CallCaching, to completely avoid this issue it might be necessary to impose a maximum limit on the [number of tasks](https://cromwell.readthedocs.io/en/stable/backends/Backends/#backend-job-limits) running at the same by setting the `concurrent-job-limit` variable to a reasonable amount. On some NFS setups, when running a job you might get the error `Failed to read_int(".../execution/stdout")` which is the result of asynchronous writing over the `stdout` file between a node running a task and the node running the Cromwell server. To obviate this issue, you might want to include the `script-epilogue = "sleep 5 && sync"` option to give enough time to NFS to synchronozie the `stdout` file across nodes before labeling a task as completed
 
-The `check-alive` command was altered from the default [SLURM](https://cromwell.readthedocs.io/en/stable/backends/SLURM/) configuration file to prevent Cromwell to infer that a task has failed when the command that checks for whether the task is alive times out. The `5004` value corresponds to the SLURM error code `SLURM_PROTOCOL_SOCKET_IMPL_TIMEOUT` as implemented in [slurm_errno.h](https://github.com/SchedMD/slurm/blob/master/slurm/slurm_errno.h) and [slurm_errno.c](https://github.com/SchedMD/slurm/blob/master/src/common/slurm_errno.c)
+By setting the [exit-code-timeout-seconds](https://cromwell.readthedocs.io/en/stable/backends/HPC/#exit-code-timeout) option Cromwell will check whether jobs submitted to SLURM are still alive. The `check-alive` command was altered from the default [SLURM](https://cromwell.readthedocs.io/en/stable/backends/SLURM/) configuration file to prevent Cromwell to infer that a task has failed when the command that checks for whether the task is alive times out. The `5004` value corresponds to the SLURM error code `SLURM_PROTOCOL_SOCKET_IMPL_TIMEOUT` as implemented in [slurm_errno.h](https://github.com/SchedMD/slurm/blob/master/slurm/slurm_errno.h) and [slurm_errno.c](https://github.com/SchedMD/slurm/blob/master/src/common/slurm_errno.c)
 
 Google Cloud Backend
 --------------------
@@ -512,7 +516,34 @@ call-caching {
 Running Cromwell
 ================
 
-* Start the Cromwell server on the node running the mySQL server with the following command:
+* To see if Cromwell can run on your machine, the first step would be to run it on a basic workflow without the use of containers. To do so, edit and generate the following `hello.wdl` workflow file:
+```
+version development
+
+workflow myWorkflow {
+  call myTask
+}
+
+task myTask {
+  command {
+    echo "hello world"
+  }
+  output {
+    String out = read_string(stdout())
+  }
+}
+```
+* Run the workflow using Cromwell:
+```
+$ java -jar cromwell-XY.jar run hello.wdl
+```
+* You should receive an output as follows:
+```
+{
+  "myWorkflow.myTask.out": "hello world"
+}
+```
+* Once we know that Cromwell can run a basic workflow, start Cromwell as a server on the node running the mySQL server with the following command:
 ```
 $ (java -XX:MaxRAMPercentage=90 -Dconfig.file=cromwell.conf -jar cromwell-XY.jar server &)
 ```
@@ -520,7 +551,7 @@ $ (java -XX:MaxRAMPercentage=90 -Dconfig.file=cromwell.conf -jar cromwell-XY.jar
 ```
 $ killall java
 ```
-* Now it would be a good time to test whether the configuration worked well. Edit and generate the following `hello.wdl` workflow file:
+* Edit and generate the following `hello.wdl` workflow file:
 ```
 version development
 
@@ -540,7 +571,7 @@ task myTask {
   }
 }
 ```
-* Submit the workflow to the Cromwell server:
+* This workflow will make use of containers so if you are using the shared filesystem backend make sure Cromwell was configured to submit tasks using Singularity. To submit the workflow to the Cromwell server use:
 ```
 $ java -jar cromwell-XY.jar submit hello.wdl
 ```
@@ -574,6 +605,10 @@ $ java -jar cromwell-XY.jar submit mocha.wdl -i {sample-set-id}.json -o options.
 * If you want to [run](https://cromwell.readthedocs.io/en/stable/CommandLine/#run) a job without starting a server you can use the following syntax instead:
 ```
 $ java -jar cromwell-XY.jar run mocha.wdl -i {sample-set-id}.json -o options.json --metadata-output metadata.json
+```
+* To read the metadata you can open the file in the Firefox browser:
+```
+$ firefox metadata.json
 ```
 * To monitor the status of jobs submitted to the server or while running, you can use:
 ```
@@ -630,10 +665,13 @@ To understand what inputs and outputs were provided to each task by the main wor
 ```
 $ curl -X GET http://localhost:8000/api/workflows/v1/{workflow_uuid}/metadata > metadata.{workflow_uuid}.json
 ```
-If rather than using Cromwell in server mode you only [run](https://cromwell.readthedocs.io/en/stable/CommandLine/#run) a single workflow, make sure you use the `--metadata-output metadata.json` option to generate the metadata at the end of the run
-and to visualize the file you can run:
+If rather than using Cromwell in server mode you only [run](https://cromwell.readthedocs.io/en/stable/CommandLine/#run) a single workflow, make sure you use the `--metadata-output metadata.json` option to generate the metadata at the end of the run and to visualize the file you can run:
 ```
 $ jq < metadata.{workflow_uuid}.json
+```
+A common reason for a pipeline failing is that some of the input files were not located where expected. Unfortunately Cromwell does a very poor job at flagging this type of common issues. To see if this is the case, you can grep for the keyword `NoSuchFileException` in the metadata:
+```
+$ jq < metadata.{workflow_uuid}.json | grep NoSuchFileException
 ```
 For a large cohort the metadata can become very large and it could take some time to extract this information from the Cromwell server. To get a summary of which tasks succeded and failed you can run:
 ```

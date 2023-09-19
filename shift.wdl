@@ -1,21 +1,22 @@
 version development
 
-## Copyright (c) 2021-2022 Giulio Genovese
+## Copyright (c) 2021-2023 Giulio Genovese
 ##
-## Version 2022-12-21
+## Version 2023-09-19
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs allelic shift imbalance analysis in a given region
 ##
 ## Cromwell version support
-## - Successfully tested on v84
+## - Successfully tested on v85
 ##
 ## Distributed under terms of the MIT License
 
 struct Reference {
   File fasta
   File fasta_fai
+  Int n_x_chr
   File? cyto_file
   String? chr_prefix
   Array[Int] len
@@ -34,12 +35,14 @@ workflow shift {
     File pheno_tsv_file
     String as_id = "AS"
     String ext_string = "as"
+    String? pop
 
     String ref_name = "GRCh38"
     String? ref_fasta
     String? ref_fasta_fai
     String? ref_path
     String? chr_prefix
+    Int? n_x_chr
     String? cyto_file
     String? gff3_file
     String? rsid_vcf_file
@@ -53,16 +56,17 @@ workflow shift {
     Boolean plot = true
     String basic_bash_docker = "debian:stable-slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.16-20221221"
-    String r_mocha_docker = "r_mocha:1.16-20221221"
+    String bcftools_docker = "bcftools:1.17-20230919"
+    String r_mocha_docker = "r_mocha:1.17-20230919"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
 
   String ref_path_with_sep = select_first([ref_path, ""]) + if defined(ref_path) && select_first([ref_path]) == sub(select_first([ref_path]), "/$", "") then "/" else ""
   Reference ref = object {
-    fasta: ref_path_with_sep + select_first([ref_fasta, if ref_name == "GRCh38" then "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna" else if ref_name == "GRCh37" then "human_g1k_v37.fasta" else None]),
-    fasta_fai: ref_path_with_sep + select_first([ref_fasta_fai, if ref_name == "GRCh38" then "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.fai" else if ref_name == "GRCh37" then "human_g1k_v37.fasta.fai" else None]),
+    fasta: if defined(ref_fasta) then ref_path_with_sep + select_first([ref_fasta]) else if ref_name == "GRCh38" then ref_path_with_sep + "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna" else if ref_name == "GRCh37" then ref_path_with_sep + "human_g1k_v37.fasta" else None,
+    fasta_fai: if defined(ref_fasta_fai) then ref_path_with_sep + select_first([ref_fasta_fai]) else if ref_name == "GRCh38" then ref_path_with_sep + "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.fai" else if ref_name == "GRCh37" then ref_path_with_sep + "human_g1k_v37.fasta.fai" else None,
+    n_x_chr: select_first([n_x_chr, 23]),
     cyto_file: if defined(ref_path) || defined(cyto_file) then ref_path_with_sep + select_first([cyto_file, "cytoBand.txt.gz"]) else None,
     chr_prefix: if ref_name == "GRCh38" then "chr" else if ref_name == "GRCh37" then "" else chr_prefix,
     len: if ref_name == "GRCh38" then
@@ -90,11 +94,12 @@ workflow shift {
   Int n_batches = length(impute_tsv)-1
   scatter (idx in range(n_batches)) { Array[String] impute_tsv_rows = impute_tsv[(idx+1)] }
   Map[String, Array[String]] impute_tbl = as_map(zip(impute_tsv[0], transpose(impute_tsv_rows)))
+  # check if path is in impute table (see https://github.com/openwdl/wdl/issues/305)
+  Boolean is_path_in_impute_tbl = length(collect_by_key(zip(flatten([keys(impute_tbl),["path"]]),range(length(keys(impute_tbl))+1)))["path"])>1
 
-  # compute data paths for each batch, if available (scatter could be avoided if there was a contains_key() function)
-  scatter (key in keys(impute_tbl)) { Boolean? is_key_equal_path = if key == "path" then true else None }
+  # compute data paths for each batch
   scatter (idx in range(n_batches)) {
-    String impute_data_paths = select_first([impute_data_path, if length(select_all(is_key_equal_path))>0 then impute_tbl["path"][idx] else ""])
+    String impute_data_paths = select_first([impute_data_path, if is_path_in_impute_tbl then impute_tbl["path"][idx] else ""])
     String impute_data_paths_with_sep = impute_data_paths + (if impute_data_paths == "" || sub(impute_data_paths, "/$", "") != impute_data_paths then "" else "/")
   }
 
@@ -105,25 +110,37 @@ workflow shift {
     String chr_string = sub(sub(region_name, "[pq]*$", ""), "Y", "X")
     if (sub(chr_string, "[0-9X]+", "") == "") {
       Int pheno_idx = idx
-      Int chr_idx = sub(chr_string, "^X$", "23")
+      String pheno_chr = chr_string
+      String pheno_name = lst_header.phenos[idx]
+      String vcf_file_suffix = pheno_name + "." + ext_string + ".bcf" # https://github.com/broadinstitute/cromwell/issues/5549
+      String vcf_idx_suffix = pheno_name + "." + ext_string + ".bcf.csi" # https://github.com/broadinstitute/cromwell/issues/5549
+      Int chr_idx = sub(chr_string, "^X$", ref.n_x_chr)
       String arm = sub(region_name, "^[0-9XY]*", "")
       String pheno_regions = ref.chr_prefix + chr_string + if arm == "p" then ":1-" + ref.pcen[(chr_idx - 1)] else if arm == "q" then ":" + ref.qcen[(chr_idx - 1)] + "-" + ref.len[(chr_idx - 1)] else ""
     }
   }
 
-  # scatter target genotypes
-  scatter (p in cross(range(n_batches), select_all(pheno_idx))) {
-    String cross_idx = p.right
+  # generate list of all chromosomes to be processed
+  Map[String, Array[String]] chr2pheno_idx = collect_by_key(zip(select_all(pheno_chr), select_all(pheno_idx)))
+  Map[String, Array[String]] chr2pheno_names = collect_by_key(zip(select_all(pheno_chr), select_all(pheno_name)))
+  Map[String, Array[String]] chr2regions = collect_by_key(zip(select_all(pheno_chr), select_all(pheno_regions)))
+  Map[String, Array[String]] chr2vcf_file_suffix = collect_by_key(zip(select_all(pheno_chr), select_all(vcf_file_suffix))) # https://github.com/broadinstitute/cromwell/issues/5549
+  Map[String, Array[String]] chr2vcf_idx_suffix = collect_by_key(zip(select_all(pheno_chr), select_all(vcf_idx_suffix))) # https://github.com/broadinstitute/cromwell/issues/5549
+  scatter (p in cross(range(n_batches), keys(chr2pheno_names))) {
+    Array[Int] cross_idx = chr2pheno_idx[p.right]
     call vcf_summary {
       input:
-        vcf_file = impute_data_paths_with_sep[p.left] + impute_tbl[("chr" + chr_string[p.right] + "_imp_vcf")][p.left],
-        vcf_idx = impute_data_paths_with_sep[p.left] + impute_tbl[("chr" + chr_string[p.right] + "_imp_vcf_index")][p.left],
-        pheno_name = lst_header.phenos[p.right],
-        region = select_first([pheno_regions[p.right]]),
+        vcf_file = impute_data_paths_with_sep[p.left] + impute_tbl[("chr" + p.right + "_imp_vcf")][p.left],
+        vcf_idx = impute_data_paths_with_sep[p.left] + impute_tbl[("chr" + p.right + "_imp_vcf_index")][p.left],
+        pheno_names = chr2pheno_names[p.right],
+        regions = chr2regions[p.right],
+        vcf_file_suffix = chr2vcf_file_suffix[p.right], # https://github.com/broadinstitute/cromwell/issues/5549
+        vcf_idx_suffix = chr2vcf_idx_suffix[p.right], # https://github.com/broadinstitute/cromwell/issues/5549
         keep_samples_file = keep_samples_file,
         remove_samples_file = remove_samples_file,
         pheno_tsv_file = pheno_tsv_file,
         fisher_exact = fisher_exact,
+        filebase = sample_set_id + "." + p.left,
         as_id = as_id,
         ext_string = ext_string,
         drop_genotypes = drop_genotypes,
@@ -132,8 +149,8 @@ workflow shift {
   }
 
   scatter (idx in select_all(pheno_idx)) {
-    Map[Int, Array[File]] idx2vcf_files = collect_by_key(zip(cross_idx, vcf_summary.as_vcf_file))
-    Map[Int, Array[File]] idx2vcf_idxs = collect_by_key(zip(cross_idx, vcf_summary.as_vcf_idx))
+    Map[Int, Array[File]] idx2vcf_files = collect_by_key(zip(flatten(cross_idx), flatten(vcf_summary.as_vcf_files)))
+    Map[Int, Array[File]] idx2vcf_idxs = collect_by_key(zip(flatten(cross_idx), flatten(vcf_summary.as_vcf_idxs)))
     call vcf_merge {
       input:
         vcf_files = idx2vcf_files[idx],
@@ -146,22 +163,24 @@ workflow shift {
         region = select_first([pheno_regions[idx]]),
         fisher_exact = fisher_exact,
         as_id = as_id,
-        filebase = sample_set_id + "." + ext_string + "_" + lst_header.phenos[idx],
-        pheno_name = ext_string + "_" + lst_header.phenos[idx],
+        filebase = sample_set_id + "." + ext_string + "_" + lst_header.phenos[idx] + if defined(pop) then "." + select_first([pop]) else "",
+        pheno_name = ext_string + "_" + lst_header.phenos[idx] + if defined(pop) then "." + select_first([pop]) else "",
         phred_score = phred_score,
         docker = docker_repository_with_sep + bcftools_docker
     }
 
     if (plot) {
-      call assoc_plot {
-        input:
-          vcf_file = vcf_merge.gwas_vcf_file,
-          vcf_idx = vcf_merge.gwas_vcf_idx,
-          region = select_first([pheno_regions[idx]]),
-          cyto_file = ref.cyto_file,
-          csq = defined(ref.gff3_file),
-          filebase = sample_set_id + "." + ext_string + "_" + lst_header.phenos[idx],
-          docker = docker_repository_with_sep + r_mocha_docker
+      if (vcf_merge.n > 0) {
+        call assoc_plot {
+          input:
+            vcf_file = vcf_merge.gwas_vcf_file,
+            vcf_idx = vcf_merge.gwas_vcf_idx,
+            region = select_first([pheno_regions[idx]]),
+            cyto_file = ref.cyto_file,
+            csq = defined(ref.gff3_file),
+            filebase = sample_set_id + "." + ext_string + "_" + lst_header.phenos[idx] + if defined(pop) then "." + select_first([pop]) else "",
+            docker = docker_repository_with_sep + r_mocha_docker
+        }
       }
     }
   }
@@ -218,12 +237,15 @@ task vcf_summary {
   input {
     File vcf_file
     File vcf_idx
-    String pheno_name
-    String region
+    Array[String]+ pheno_names
+    Array[String]+ regions
+    Array[String]+ vcf_file_suffix # suffix array passed due to bug https://github.com/broadinstitute/cromwell/issues/5549
+    Array[String]+ vcf_idx_suffix # suffix array passed due to bug https://github.com/broadinstitute/cromwell/issues/5549
     File? keep_samples_file
     File? remove_samples_file
     File pheno_tsv_file
     Boolean fisher_exact
+    String filebase
     String as_id
     String ext_string
     Boolean drop_genotypes = true
@@ -238,58 +260,62 @@ task vcf_summary {
 
   Float vcf_size = size(vcf_file, "GiB")
   Int disk_size = select_first([disk_size_override, ceil(10.0 + 2.0 * vcf_size)])
-  String filebase = basename(basename(basename(basename(vcf_file, ".bcf"), ".vcf.gz"), ".as"), ".chr" + sub(sub(region, ":.*$", ""), "^chr", "")) + '.' + pheno_name
 
   command <<<
     set -euo pipefail
     echo "~{sep("\n", select_all([vcf_file, vcf_idx, keep_samples_file, remove_samples_file, pheno_tsv_file]))}" | \
       tr '\n' '\0' | xargs -0 mv -t .
-    awk -F"\t" 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}
-      NR>1 && ($(f["~{pheno_name}"])==0 || $(f["~{pheno_name}"])==1) {print $(f["sample_id"])"\t"$(f["~{pheno_name}"])}' \
-      "~{basename(pheno_tsv_file)}" > "~{filebase}.pheno.tsv"
-    cut -f1 "~{filebase}.pheno.tsv"~{if defined(keep_samples_file) then " | \\\n" +
-    "awk -F\"\\t\" 'NR==FNR {x[$1]++} NR>FNR && $1 in x' \"" + basename(select_first([keep_samples_file])) + "\" -"
-    else ""}~{if defined(remove_samples_file) then " | \\\n" +
-    "awk -F\"\\t\" 'NR==FNR {x[$1]++} NR>FNR && !($1 in x)' \"" + basename(select_first([remove_samples_file])) + "\" -"
-    else ""} > "~{filebase}.samples.lines"
-    ~{if fisher_exact then "awk -F\"\\t\" '$2==0 {print $1}'  \"" + filebase + ".pheno.tsv\" > \"" + filebase + ".controls.lines\"" else ""}
-    awk -F"\t" '$2==1 {print $1}' "~{filebase}.pheno.tsv" > "~{filebase}.cases.lines"
-    bcftools +mochatools \
-      --no-version \
-      --output-type u \
-      --regions "~{region}" \
-      "~{basename(vcf_file)}" \
-      -- --tags MACH \
-      --samples-file "~{filebase}.samples.lines" \
-      --force-samples | \
-    bcftools annotate \
-      --no-version \
-      --output-type u \
-      --remove ID,QUAL,FILTER,^INFO/MACH,^FMT/GT,FMT/~{as_id}~{if fisher_exact then " | \\\n" +
-    "bcftools +contrast \\\n" +
-    "  --output-type u \\\n" +
-    "  --annots NASSOC \\\n" +
-    "  --control-samples \"" + filebase + ".controls.lines\" \\\n" +
-    "  --case-samples \"" + filebase + ".cases.lines\" \\\n" +
-    "  --force-samples"
-    else ""} | \
-    bcftools +mochatools \
-      --no-version \
-      --output-type b \
-      -- --summary ~{as_id} \
-      --samples-file "~{filebase}.cases.lines" \
-      --force-samples \
-      ~{if drop_genotypes then "--drop-genotypes" else ""} | \
-    tee "~{filebase}.~{ext_string}.bcf" | \
-    bcftools index --force --output "~{filebase}.~{ext_string}.bcf.csi"
-    rm "~{filebase}.pheno.tsv" "~{filebase}.samples.lines"~{if fisher_exact then " \"" + filebase + ".controls.lines\"" else ""} "~{filebase}.cases.lines"
+    pheno_names=~{write_lines(pheno_names)}
+    regions=~{write_lines(regions)}
+    paste $pheno_names $regions | while IFS=$'\t' read pheno_name region; do
+      awk -F"\t" -v pheno_name=$pheno_name 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}
+        NR>1 && ($(f[pheno_name])==0 || $(f[pheno_name])==1) {print $(f["sample_id"])"\t"$(f[pheno_name])}' \
+        "~{basename(pheno_tsv_file)}" > "~{filebase}.pheno.tsv"
+      cut -f1 "~{filebase}.pheno.tsv"~{if defined(keep_samples_file) then " | \\\n" +
+      "awk -F\"\\t\" 'NR==FNR {x[$1]++} NR>FNR && $1 in x' \"" + basename(select_first([keep_samples_file])) + "\" -"
+      else ""}~{if defined(remove_samples_file) then " | \\\n" +
+      "awk -F\"\\t\" 'NR==FNR {x[$1]++} NR>FNR && !($1 in x)' \"" + basename(select_first([remove_samples_file])) + "\" -"
+      else ""} > "~{filebase}.samples.lines"
+      ~{if fisher_exact then "awk -F\"\\t\" '$2==0 {print $1}'  \"" + filebase + ".pheno.tsv\" > \"" + filebase + ".controls.lines\"" else ""}
+      awk -F"\t" '$2==1 {print $1}' "~{filebase}.pheno.tsv" > "~{filebase}.cases.lines"
+      bcftools +mochatools \
+        --no-version \
+        --output-type u \
+        --regions $region \
+        "~{basename(vcf_file)}" \
+        -- --tags MACH \
+        --samples-file "~{filebase}.samples.lines" \
+        --force-samples | \
+      bcftools annotate \
+        --no-version \
+        --output-type u \
+        --remove ID,QUAL,FILTER,^INFO/MACH,^FMT/GT,FMT/~{as_id}~{if fisher_exact then " | \\\n" +
+      "bcftools +contrast \\\n" +
+      "  --output-type u \\\n" +
+      "  --annots NASSOC \\\n" +
+      "  --control-samples \"" + filebase + ".controls.lines\" \\\n" +
+      "  --case-samples \"" + filebase + ".cases.lines\" \\\n" +
+      "  --force-samples"
+      else ""} | \
+      bcftools +mochatools \
+        --no-version \
+        --output-type u \
+        -- --summary ~{as_id} \
+        --samples-file "~{filebase}.cases.lines" \
+        --force-samples \
+        ~{if drop_genotypes then "--drop-genotypes" else ""} | \
+      bcftools view --no-version --output-type b --include 'sum(~{as_id})>0' | \
+      tee "~{filebase}.$pheno_name.~{ext_string}.bcf" | \
+      bcftools index --force --output "~{filebase}.$pheno_name.~{ext_string}.bcf.csi"
+      rm "~{filebase}.pheno.tsv" "~{filebase}.samples.lines" ~{if fisher_exact then "\"" + filebase + ".controls.lines\" " else ""}"~{filebase}.cases.lines"
+    done
     echo "~{sep("\n", select_all([vcf_file, vcf_idx, keep_samples_file, remove_samples_file, pheno_tsv_file]))}" | \
       sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm
   >>>
 
   output {
-    File as_vcf_file = filebase + "." + ext_string + ".bcf"
-    File as_vcf_idx = filebase + "." + ext_string + ".bcf.csi"
+    Array[File] as_vcf_files = prefix(filebase + ".", vcf_file_suffix)
+    Array[File] as_vcf_idxs = prefix(filebase + ".", vcf_idx_suffix)
   }
 
   runtime {
@@ -388,16 +414,18 @@ task vcf_merge {
     awk -F"\t" '{if ($6*($5-$6/2)==0) si=1; else si=($5*$7/$6-$6)/($5-$6/2);
       nc=$8+$9; es=log(($9+.5)/($8+.5)); se=sqrt(1/($8+.5)+1/($9+.5)); lp=$10/10; af=$6/$5/2; ac=$6;
       print $1,$2,$3,$4,$5,si,nc,es,se,lp,af,ac}') | \
-    bcftools +munge --no-version -c REGENIE --fai "~{basename(fasta_fai)}" -s as_X_loss | \
+    bcftools +munge --no-version -c REGENIE --fai "~{basename(fasta_fai)}" -s ~{pheno_name} | \
     bcftools merge --no-version --merge none --no-index --output-type b "~{filebase}.bcf" - | \
     tee "~{filebase}.gwas.bcf" | \
     bcftools index --force --output "~{filebase}.gwas.bcf.csi"
+    bcftools query -f "\n" -i 'sum(~{as_id})>1' "~{filebase}.gwas.bcf" | wc -l
     rm "~{filebase}.bcf" "~{filebase}.bcf.csi"
     echo "~{sep("\n", select_all([ref_fasta, fasta_fai, gff3_file, rsid_vcf_file, rsid_vcf_idx]))}" | \
       cat - $vcf_files $vcf_idxs | sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm
   >>>
 
   output {
+    Int n = read_int(stdout())
     File gwas_vcf_file = filebase + ".gwas.bcf"
     File gwas_vcf_idx = filebase + ".gwas.bcf.csi"
   }

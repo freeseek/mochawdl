@@ -322,3 +322,8 @@ Additionally, you can also create an additional table for principal components
 ```
 (echo sample_id pc{01..40}; cut -d" " -f1,26-65 ukb_sqc_v2.txt) | tr ' ' '\t' > ukb.pcs.tsv
 ```
+
+If you only want to analyzed individuals of white British ancestry, you can generate a list
+```
+awk '$24 {print $1}' ukb_sqc_v2.txt > ukb.eur.lines
+```

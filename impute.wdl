@@ -1,22 +1,23 @@
 version development
 
-## Copyright (c) 2021-2022 Giulio Genovese
+## Copyright (c) 2021-2023 Giulio Genovese
 ##
-## Version 2022-12-21
+## Version 2023-09-19
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs impute5 or beagle5 on a set of VCFs
 ##
 ## Cromwell version support
-## - Successfully tested on v84
+## - Successfully tested on v85
 ##
 ## Distributed under terms of the MIT License
 
 struct Reference {
   File fasta_fai
   Int min_chr_len
-  String mhc_reg
+  Int n_x_chr
+  String? mhc_reg
   File genetic_map_file
   String panel_pfx
   String panel_sfx
@@ -39,6 +40,7 @@ workflow impute {
     String? ref_path
     String? ref_fasta_fai
     Int? min_chr_len
+    Int? n_x_chr
     String? mhc_reg
     String? genetic_map_file
     String? panel_pfx
@@ -50,7 +52,6 @@ workflow impute {
     String? mocha_data_path
     String? impute_data_path
     File? remove_samples_file
-    Boolean convert_panel = true
     Boolean beagle = false
     Boolean out_ds = true
     Boolean out_gp = false
@@ -59,23 +60,24 @@ workflow impute {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.16-20221221"
-    String impute5_docker = "impute5:1.16-20221221"
-    String beagle5_docker = "beagle5:1.16-20221221"
+    String bcftools_docker = "bcftools:1.17-20230919"
+    String impute5_docker = "impute5:1.17-20230919"
+    String beagle5_docker = "beagle5:1.17-20230919"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
 
   String ref_path_with_sep = select_first([ref_path, ""]) + if defined(ref_path) && select_first([ref_path]) == sub(select_first([ref_path]), "/$", "") then "/" else ""
   Reference ref = object {
-    fasta_fai: ref_path_with_sep + select_first([ref_fasta_fai, if ref_name == "GRCh38" then "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.fai" else if ref_name == "GRCh37" then "human_g1k_v37.fasta.fai" else None]),
-    min_chr_len: select_first([min_chr_len, 2000000]),
-    mhc_reg: select_first([mhc_reg, if ref_name == "GRCh38" then "chr6:27518932-33480487" else if ref_name == "GRCh37" then "6:27486711-33448264" else None]),
-    genetic_map_file: ref_path_with_sep + select_first([genetic_map_file, if ref_name == "GRCh38" then "genetic_map_hg38_withX.txt.gz" else if ref_name == "GRCh37" then "genetic_map_hg19_withX.txt.gz" else None]),
-    panel_pfx: ref_path_with_sep + select_first([panel_pfx, if ref_name == "GRCh38" then "1kGP_high_coverage_Illumina." else if ref_name == "GRCh37" then "ALL.chr" else None]),
-    panel_sfx: select_first([panel_sfx, if ref_name == "GRCh38" then ".bcf" else if ref_name == "GRCh37" then ".phase3_integrated.20130502.genotypes.bcf" else None]),
+    fasta_fai: if defined(ref_fasta_fai) then ref_path_with_sep + select_first([ref_fasta_fai]) else if ref_name == "GRCh38" then ref_path_with_sep + "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.fai" else if ref_name == "GRCh37" then ref_path_with_sep + "human_g1k_v37.fasta.fai" else None,
+    min_chr_len: select_first([min_chr_len, 3000000]),
+    n_x_chr: select_first([n_x_chr, 23]),
+    mhc_reg: if defined(mhc_reg) then select_first([mhc_reg]) else if ref_name == "GRCh38" then "chr6:27518932-33480487" else if ref_name == "GRCh37" then "6:27486711-33448264" else None,
+    genetic_map_file: if defined(genetic_map_file) then ref_path_with_sep + select_first([genetic_map_file]) else if ref_name == "GRCh38" then ref_path_with_sep + "genetic_map_hg38_withX.txt.gz" else if ref_name == "GRCh37" then ref_path_with_sep + "genetic_map_hg19_withX.txt.gz" else None,
+    panel_pfx: if defined(panel_pfx) then ref_path_with_sep + select_first([panel_pfx]) else if ref_name == "GRCh38" then ref_path_with_sep + "1kGP_high_coverage_Illumina." else if ref_name == "GRCh37" then ref_path_with_sep + "ALL.chr" else None,
+    panel_sfx: if defined(panel_sfx) then select_first([panel_sfx]) else if ref_name == "GRCh38" then ".bcf" else if ref_name == "GRCh37" then ".phase3_integrated.20130502.genotypes.bcf" else None,
     panel_idx: select_first([panel_idx, ".csi"]),
-    n_panel_smpls: select_first([n_panel_smpls, if ref_name == "GRCh38" then 3202 else if ref_name == "GRCh37" then 2504 else None]),
+    n_panel_smpls: if defined(n_panel_smpls) then select_first([n_panel_smpls]) else if ref_name == "GRCh38" then 3202 else if ref_name == "GRCh37" then 2504 else None
   }
 
   # read table with batches information (scatter could be avoided if there was a tail() function)
@@ -83,14 +85,15 @@ workflow impute {
   Int n_mocha_batches = length(mocha_tsv)-1
   scatter (idx in range(n_mocha_batches)) { Array[String] mocha_tsv_rows = mocha_tsv[(idx+1)] }
   Map[String, Array[String]] mocha_tbl = as_map(zip(mocha_tsv[0], transpose(mocha_tsv_rows)))
+  # check if path is in mocha table (see https://github.com/openwdl/wdl/issues/305)
+  Boolean is_path_in_mocha_tbl = length(collect_by_key(zip(flatten([keys(mocha_tbl),["path"]]),range(length(keys(mocha_tbl))+1)))["path"])>1
 
-  # compute data paths for each batch, if available (scatter could be avoided if there was a contains_key() function)
-  scatter (key in keys(mocha_tbl)) { Boolean? is_key_equal_path = if key == "path" then true else None }
+  # compute data paths for each batch
   scatter (idx in range(n_mocha_batches)) {
     String mocha_data_paths_with_sep = (if defined(mocha_data_path) then sub(select_first([mocha_data_path]), "/$", "") + "/" else "") +
-                                       (if length(select_all(is_key_equal_path))>0 then sub(mocha_tbl["path"][idx], "/$", "") + "/" else "")
+                                       (if is_path_in_mocha_tbl then sub(mocha_tbl["path"][idx], "/$", "") + "/" else "")
     String impute_data_paths_with_sep = (if defined(impute_data_path) then sub(select_first([impute_data_path]), "/$", "") + "/" else "") +
-                                        (if length(select_all(is_key_equal_path))>0 then sub(mocha_tbl["path"][idx], "/$", "") + "/" else "")
+                                        (if is_path_in_mocha_tbl then sub(mocha_tbl["path"][idx], "/$", "") + "/" else "")
   }
 
   Array[Array[String]] ref_fasta_fai_tbl = transpose(read_tsv(ref.fasta_fai))
@@ -142,14 +145,22 @@ workflow impute {
 
     # convert reference panel
     scatter (idx in range(length(intervals_tbl[0]))) {
-      call init_panel {
-        input:
-          vcf_file = panel_flatten_vcf_files[idx],
-          vcf_idx = panel_flatten_vcf_idxs[idx],
-          chr = intervals_tbl[0][idx],
-          convert = convert_panel,
-          beagle = beagle,
-          docker = if beagle then docker_repository_with_sep + beagle5_docker else docker_repository_with_sep + impute5_docker
+      if (beagle) {
+        call init_beagle5_panel {
+          input:
+            vcf_file = panel_flatten_vcf_files[idx],
+            chr = intervals_tbl[0][idx],
+            docker = docker_repository_with_sep + beagle5_docker
+        }
+      }
+      if (!beagle) {
+        call init_impute5_panel {
+          input:
+            vcf_file = panel_flatten_vcf_files[idx],
+            vcf_idx = panel_flatten_vcf_idxs[idx],
+            chr = intervals_tbl[0][idx],
+            docker = docker_repository_with_sep + impute5_docker
+        }
       }
     }
 
@@ -166,9 +177,9 @@ workflow impute {
 
     # impute genotypes
     Map[String, Int] chr2int = as_map(zip(chrs, range(length(chrs))))
-    String mhc_chr = sub(ref.mhc_reg, ":.*$", "")
-    Int mhc_beg = sub(sub(ref.mhc_reg, "-.*$", ""), "^.*:", "")
-    Int mhc_end = sub(ref.mhc_reg, "^.*-", "")
+    String? mhc_chr = if defined(ref.mhc_reg) then sub(select_first([ref.mhc_reg]), ":.*$", "") else None
+    Int? mhc_beg = if defined(ref.mhc_reg) then sub(sub(select_first([ref.mhc_reg]), "-.*$", ""), "^.*:", "") else None
+    Int? mhc_end = if defined(ref.mhc_reg) then sub(select_first([ref.mhc_reg]), "^.*-", "") else None
     scatter (p in cross(range(n_mocha_batches), range(length(intervals_tbl[0])))) {
       if (vcf_scatter.n_markers[p.left][p.right] > 0) {
         Int cross_idx = p.left * n_chrs + chr2int[(intervals_tbl[0][p.right])]
@@ -176,35 +187,65 @@ workflow impute {
         Int buffer_end = intervals_tbl[2][p.right] # cast string to integer
         Int beg = intervals_tbl[3][p.right] # cast string to integer
         Int end = intervals_tbl[4][p.right] # cast string to integer
-        call vcf_impute {
-          input:
-            n_smpls = vcf_scatter.n_smpls[p.left],
-            n_markers = vcf_scatter.n_markers[p.left][p.right],
-            pgt_file = vcf_scatter.vcf_files[p.left][p.right],
-            genetic_map_file = ref.genetic_map_file,
-            n_panel_smpls = ref.n_panel_smpls,
-            n_panel_markers = n_panel_flatten_markers[p.right],
-            panel_genotypes_file = select_first([init_panel.panel_genotypes_file[p.right], panel_flatten_vcf_files[p.right]]),
-            panel_genotypes_idx = select_first([init_panel.panel_genotypes_idx[p.right], panel_flatten_vcf_idxs[p.right]]),
-            panel_sites_file = init_panel.panel_sites_file[p.right],
-            panel_sites_idx = init_panel.panel_sites_idx[p.right],
-            ref_fasta_fai = ref.fasta_fai,
-            chr = intervals_tbl[0][p.right],
-            mhc = intervals_tbl[0][p.right] == mhc_chr && buffer_beg <= mhc_end && buffer_end > mhc_beg,
-            region = intervals_tbl[0][p.right] + ":" + (1 + beg) + "-" + end,
-            buffer_region = intervals_tbl[0][p.right] + ":" + (1 + buffer_beg) + "-" + buffer_end,
-            beagle = beagle,
-            out_ds= out_ds,
-            out_gp= out_gp,
-            out_ap= out_ap,
-            impute_extra_args = impute_extra_args,
-            docker = if beagle then docker_repository_with_sep + beagle5_docker else docker_repository_with_sep + impute5_docker
+        if (beagle) {
+          call vcf_beagle5 {
+            input:
+              n_smpls = vcf_scatter.n_smpls[p.left],
+              n_markers = vcf_scatter.n_markers[p.left][p.right],
+              pgt_file = vcf_scatter.vcf_files[p.left][p.right],
+              n_x_chr = ref.n_x_chr,
+              genetic_map_file = ref.genetic_map_file,
+              n_panel_smpls = ref.n_panel_smpls,
+              n_panel_markers = n_panel_flatten_markers[p.right],
+              panel_bcf_file = select_first([init_beagle5_panel.bcf_file[p.right]]),
+              panel_csi_file = select_first([init_beagle5_panel.csi_file[p.right]]),
+              panel_bref3_file = select_first([init_beagle5_panel.bref3_file[p.right]]),
+              ref_fasta_fai = ref.fasta_fai,
+              chr = intervals_tbl[0][p.right],
+              mhc = if defined(ref.mhc_reg) then intervals_tbl[0][p.right] == mhc_chr && buffer_beg <= mhc_end && buffer_end > mhc_beg else false,
+              region = intervals_tbl[0][p.right] + ":" + (1 + beg) + "-" + end,
+              buffer_region = intervals_tbl[0][p.right] + ":" + (1 + buffer_beg) + "-" + buffer_end,
+              out_ds= out_ds,
+              out_gp= out_gp,
+              out_ap= out_ap,
+              impute_extra_args = impute_extra_args,
+              docker = docker_repository_with_sep + beagle5_docker
+          }
         }
+        if (!beagle) {
+          call vcf_impute5 {
+            input:
+              n_smpls = vcf_scatter.n_smpls[p.left],
+              n_markers = vcf_scatter.n_markers[p.left][p.right],
+              pgt_file = vcf_scatter.vcf_files[p.left][p.right],
+              n_x_chr = ref.n_x_chr,
+              genetic_map_file = ref.genetic_map_file,
+              n_panel_smpls = ref.n_panel_smpls,
+              n_panel_markers_common = select_first([init_impute5_panel.n_markers[p.right]]),
+              n_panel_markers_total = n_panel_flatten_markers[p.right],
+              panel_fam_file = select_first([init_impute5_panel.fam_file[p.right]]),
+              panel_bcf_file = select_first([init_impute5_panel.bcf_file[p.right]]),
+              panel_csi_file = select_first([init_impute5_panel.csi_file[p.right]]),
+              panel_bin_file = select_first([init_impute5_panel.bin_file[p.right]]),
+              region = intervals_tbl[0][p.right] + ":" + (1 + beg) + "-" + end,
+              buffer_region = intervals_tbl[0][p.right] + ":" + (1 + buffer_beg) + "-" + buffer_end,
+              chr = intervals_tbl[0][p.right],
+              mhc = if defined(ref.mhc_reg) then intervals_tbl[0][p.right] == mhc_chr && buffer_beg <= mhc_end && buffer_end > mhc_beg else false,
+              out_ds= out_ds,
+              out_gp= out_gp,
+              out_ap= out_ap,
+              impute_extra_args = impute_extra_args,
+              docker = docker_repository_with_sep + impute5_docker
+          }
+        }
+        File imp_vcf_file = select_first([vcf_beagle5.imp_vcf_file, vcf_impute5.imp_vcf_file])
+        File imp_vcf_idx = select_first([vcf_beagle5.imp_vcf_idx, vcf_impute5.imp_vcf_idx])
+        File log_file = select_first([vcf_beagle5.log, vcf_impute5.log])
       }
     }
 
-    Map[Int, Array[File]] idx2vcf_files = collect_by_key(zip(select_all(cross_idx), select_all(vcf_impute.imp_vcf_file)))
-    Map[Int, Array[File]] idx2vcf_idxs = collect_by_key(zip(select_all(cross_idx), select_all(vcf_impute.imp_vcf_idx)))
+    Map[Int, Array[File]] idx2vcf_files = collect_by_key(zip(select_all(cross_idx), select_all(imp_vcf_file)))
+    Map[Int, Array[File]] idx2vcf_idxs = collect_by_key(zip(select_all(cross_idx), select_all(imp_vcf_idx)))
     scatter (p in cross(range(n_mocha_batches), range(n_chrs))) {
       if (length(idx2vcf_files[(p.left * n_chrs + p.right)]) > 1) {
         call vcf_concat {
@@ -269,7 +310,7 @@ workflow impute {
   output {
     Array[File] vcf_files = select_first([vcf_extend.ext_vcf_file, chr_imp_vcf_files])
     Array[File] vcf_idxs = select_first([vcf_extend.ext_vcf_idx, chr_imp_vcf_idxs])
-    Array[File]? logs = if mode == "pgt" then select_all(select_first([vcf_impute.log])) else None
+    Array[File]? log_files = if mode == "pgt" then select_all(select_first([log_file])) else None
     File impute_tsv_file = write_tsv.file
   }
 
@@ -421,6 +462,7 @@ task vcf_scatter {
     Int clevel = 2
     File? remove_samples_file
     String? chr
+    Boolean add_ac_an = true # for compatibility with IMPUTE5 v2
 
     String docker
     Int? cpu_override
@@ -450,7 +492,7 @@ task vcf_scatter {
     bcftools annotate \
       --no-version \
       --output-type u \
-      --remove ID,QUAL,FILTER,INFO,^FMT/GT \
+      --remove ID,QUAL,FILTER,^INFO/AC,^INFO/AN,^FMT/GT \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
       "~{basename(vcf_file)}" | \
     ~{if defined(remove_samples_file) then
@@ -464,14 +506,15 @@ task vcf_scatter {
       --output-type u \
       --rm-dup exact \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} | \
-    bcftools +scatter \
+    ~{if add_ac_an then "bcftools +fill-AN-AC --no-version -Ou | \\\n"
+    else ""}bcftools +scatter \
       --no-version \
       --output-type b~{clevel} \
       --output vcfs \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
       --scatter-file regions.lines \
       --prefix "~{filebase}."
-    while read reg i; do
+    while IFS=$'\t' read reg i; do
       bcftools index --force "vcfs/~{filebase}.$i.bcf"
       bcftools index --nrecords "vcfs/~{filebase}.$i.bcf.csi"
     done < regions.lines > n_markers.lines
@@ -500,13 +543,10 @@ task vcf_scatter {
   }
 }
 
-task init_panel {
+task init_beagle5_panel {
   input {
     File vcf_file
-    File? vcf_idx
     String chr
-    Boolean convert = true
-    Boolean beagle = false
 
     String docker
     Int cpu = 1
@@ -523,40 +563,30 @@ task init_panel {
   command <<<
     set -euo pipefail
     mv "~{vcf_file}" .
-    ~{if defined(vcf_idx) then "mv \"" + select_first([vcf_idx]) + "\" ." else ""}
     bcftools view \
       --no-version \
       --drop-genotypes \
       --output-type u \
       "~{basename(vcf_file)}" | \
-      bcftools annotate \
-        --no-version \
-        --output-type b \
-        --remove ID,QUAL,FILTER,INFO,^FMT/GT | \
-      tee "~{filebase}.sites.bcf" | \
-      bcftools index --force --output "~{filebase}.sites.bcf.csi"
-    ~{if beagle then
-        (if chr != "X" && chr != "chrX" then
-          "bcftools view --no-version \"" + basename(vcf_file) + "\" | \\\n"
-        else
-          "bcftools +fixploidy --no-version \"" + basename(vcf_file) + "\" | \\\n" +
-          "  sed 's/0\\/0/0|0/g;s/1\\/1/1|1/g' | \\\n") +
-        "  java -jar /usr/share/beagle/bref3.jar > \"" + filebase +  ".bref3\""
-      else if convert then
-        "imp5Converter \\\n" +
-        "  --h \"" + basename(vcf_file) + "\" \\\n" +
-        "  --r " + chr + " \\\n" +
-        "  --o \"" + filebase + ".imp5\""
-      else ""}
+    bcftools annotate \
+      --no-version \
+      --output-type b \
+      --remove ID,QUAL,FILTER,INFO,^FMT/GT | \
+    tee "~{filebase}.sites.bcf" | \
+    bcftools index --force --output "~{filebase}.sites.bcf.csi"
+    ~{if chr != "X" && chr != "chrX" then
+      "bcftools view --no-version \"" + basename(vcf_file) + "\""
+    else
+      "bcftools +fixploidy --no-version \"" + basename(vcf_file) + "\" | \\\n" +
+      "  sed 's/0\\/0/0|0/g;s/1\\/1/1|1/g'"} | \
+    java -jar /usr/share/beagle/bref3.jar > "~{filebase}.bref3"
     rm "~{basename(vcf_file)}"
-    ~{if defined(vcf_idx) then "rm \"" + basename(select_first([vcf_idx])) + "\"" else ""}
   >>>
 
   output {
-    File? panel_genotypes_file = if beagle then filebase + ".bref3" else if convert then filebase + ".imp5" else None
-    File? panel_genotypes_idx = if !beagle && convert then filebase + ".imp5.idx" else None
-    File panel_sites_file = filebase + ".sites.bcf"
-    File panel_sites_idx = filebase + ".sites.bcf.csi"
+    File bcf_file = filebase + ".sites.bcf"
+    File csi_file = filebase + ".sites.bcf.csi"
+    File bref3_file = filebase + ".bref3"
   }
 
   runtime {
@@ -571,24 +601,23 @@ task init_panel {
 
 # hack https://github.com/samtools/bcftools/issues/1425 is employed in the end to fix the header
 # the command requires BCFtools 1.14 due to bug https://github.com/samtools/bcftools/issues/1497
-task vcf_impute {
+task vcf_beagle5 {
   input {
     Int n_smpls
     Int n_markers
     File pgt_file
     File genetic_map_file
+    Int n_x_chr
     Int n_panel_smpls
     Int n_panel_markers
-    File panel_genotypes_file
-    File? panel_genotypes_idx
-    File panel_sites_file
-    File panel_sites_idx
+    File panel_bcf_file
+    File panel_csi_file
+    File panel_bref3_file
     File? ref_fasta_fai
     String region
     String buffer_region
     String chr
     Boolean mhc = false # requires additional memory if imputing the MHC region
-    Boolean beagle = false
     Boolean out_ds = true
     Boolean out_gp = false
     Boolean out_ap = false
@@ -605,16 +634,16 @@ task vcf_impute {
   }
 
   Float pgt_size = size(pgt_file, "GiB")
-  Float panel_size = size(panel_genotypes_file, "GiB")
+  Float panel_size = size(panel_bcf_file, "GiB") + size(panel_csi_file, "GiB") + size(panel_bref3_file, "GiB")
   Int disk_size = select_first([disk_size_override, ceil(10.0 + 3.0 * pgt_size + (1.0 + 2.0 * n_smpls / n_panel_smpls) * panel_size)])
-  Float mult = select_first([mult_override, (if beagle then 15.0 else 10.0) * (if mhc then 2.0 else if chr == "X" || chr == "chrX" then 1.5 else 1.0)])
+  Float mult = select_first([mult_override, 15.0 * (if mhc then 2.0 else if chr == "X" || chr == "chrX" then 1.5 else 1.0)])
   Float memory = select_first([memory_override, 3.5 + mult * n_panel_markers * (n_smpls + n_panel_smpls) / 1024 / 1024 / 1024])
   Int cpu = select_first([cpu_override, if memory > 6.5 then 2 * ceil(memory / 13) else 1])
   String filebase = basename(basename(pgt_file, ".bcf"), ".vcf.gz")
 
   command <<<
     set -euo pipefail
-    echo "~{sep("\n", select_all([pgt_file, genetic_map_file, panel_genotypes_file, panel_genotypes_idx, panel_sites_file, panel_sites_idx]))}" | \
+    echo "~{sep("\n", select_all([pgt_file, genetic_map_file, panel_bcf_file, panel_csi_file, panel_bref3_file]))}" | \
       tr '\n' '\0' | xargs -0 mv -t .
     ~{if defined(ref_fasta_fai) then "mv \"" + select_first([ref_fasta_fai]) + "\" ." else ""}
     bcftools index --force "~{basename(pgt_file)}"
@@ -624,60 +653,42 @@ task vcf_impute {
       --nfiles 2 \
       --write 1 \
       "~{basename(pgt_file)}" \
-      "~{basename(panel_sites_file)}" | \
+      "~{basename(panel_bcf_file)}" | \
       bcftools query --format "\n" | wc -l)
     if [ $n_markers == 0 ]; then
       cp "~{basename(pgt_file)}" "~{filebase}.imp.bcf"
     else
       mkdir logs
-    ~{if beagle then
-      "  bcftools norm \\\n" +
-      "    --no-version \\\n" +
-      "    --rm-dup exact \\\n" +
-      "    --output-type z \\\n" +
-      "    --output \"" + filebase + ".vcf.gz\" \\\n" +
-      "    \"" + basename(pgt_file) + "\"\n" +
-      "  chr=" + chr +"; zcat \"" + basename(genetic_map_file) + "\" | \\\n" +
-      "    sed 's/^23/X/' | awk -v chr=$chr '$1==chr || \"chr\"$1==chr {print chr,\".\",$4,$2}' > genetic_map.txt\n" +
-      "  java -XX:MaxRAMPercentage=" + max_ram_percentage + " \\\n" +
-      "    -jar /usr/share/beagle/beagle.jar \\\n" +
-      "    gt=\"" + filebase + ".vcf.gz\" \\\n" +
-      "    ref=\"" + basename(panel_genotypes_file) + "\" \\\n" +
-      "    out=\"" + filebase + ".imp\" \\\n" +
-      "    map=genetic_map.txt \\\n" +
-      "    chrom=" + buffer_region + " \\\n" +
-      (if cpu > 1 then "    nthreads=" + cpu + " \\\n" else "") +
-      (if out_ap then "    ap=true \\\n" else "") +
-      (if out_gp then "    gp=true \\\n" else "") +
-      (if defined(impute_extra_args) then "    " + impute_extra_args + " \\\n" else "") +
-      "    1>&2\n" +
-      "  bcftools index --force --tbi \"" + filebase + ".imp.vcf.gz\"\n" +
-      "  bcftools view \\\n" +
-      "    --no-version \\\n" +
-      "    --output-type b \\\n" +
-      "    --regions " + region + " \\\n" +
-      "    \"" + filebase + ".imp.vcf.gz\" | \\\n" +
-      "  tee \"" + filebase + ".imp.bcf\" | \\\n" +
-      "  bcftools index --force --output \"" + filebase + ".imp.bcf.csi\"\n" +
-      "  rm \"" + filebase + ".vcf.gz\" \"" + filebase + ".imp.vcf.gz\" \"" + filebase + ".imp.vcf.gz.tbi\"\n" +
-      "  mv \"" + filebase + ".imp.log\" \"logs/" + filebase + ".imp.log\""
-    else
-      "  chr=" + chr +"; zcat \"" + basename(genetic_map_file) + "\" | \\\n" +
-      "  sed 's/^23/X/' | awk -v chr=$chr -v OFS=\"\\t\" 'BEGIN {print \"pos\",\"chr\",\"cM\"}\n" +
-      "    $1==chr || \"chr\"$1==chr {print $2,chr,$4}' > genetic_map.txt\n" +
-      "  impute5 \\\n" +
-      "    --h \"" + basename(panel_genotypes_file) + "\" \\\n" +
-      "    --m genetic_map.txt \\\n" +
-      "    --g \"" + basename(pgt_file) + "\" \\\n" +
-      "    --r " + region + " \\\n" +
-      "    --buffer-region " + buffer_region + " \\\n" +
-      "    --l \"logs/" + filebase + ".imp.log\" \\\n" +
-      (if out_gp then "    --out-gp-field \\\n" else "") +
-      (if out_ap then "    --out-ap-field \\\n" else "") +
-      "    --o \"" + filebase + ".imp.bcf\" \\\n" +
-      (if cpu > 1 then "    --threads " + cpu + " \\\n" else "") +
-      (if defined(impute_extra_args) then "  " + impute_extra_args + " \\\n" else "") +
-      "    1>&2"}
+      bcftools norm \
+        --no-version \
+        --rm-dup exact \
+        --output-type z \
+        --output "~{filebase}.vcf.gz" \
+        "~{basename(pgt_file)}"
+      chr=~{chr}; zcat "~{basename(genetic_map_file)}" | \
+        sed 's/^~{n_x_chr}/X/' | awk -v chr=$chr '$1==chr || "chr"$1==chr {print chr,".",$4,$2}' > genetic_map.txt
+      java -XX:MaxRAMPercentage=~{max_ram_percentage} \
+        -jar /usr/share/beagle/beagle.jar \
+        gt="~{filebase}.vcf.gz" \
+        ref="~{basename(panel_bref3_file)}" \
+        out="~{filebase}.imp" \
+        map=genetic_map.txt \
+        chrom=~{buffer_region} \
+        ~{if cpu > 1 then "nthreads=" + cpu else ""} \
+        ~{if out_ap then "ap=true" else ""} \
+        ~{if out_gp then "gp=true" else ""} \
+        ~{if defined(impute_extra_args) then impute_extra_args else ""} \
+        1>&2
+      bcftools index --force --tbi "~{filebase}.imp.vcf.gz"
+      bcftools view \
+        --no-version \
+        --output-type b \
+        --regions ~{region} \
+        "~{filebase}.imp.vcf.gz" | \
+      tee "~{filebase}.imp.bcf" | \
+      bcftools index --force --output "~{filebase}.imp.bcf.csi"
+      rm "~{filebase}.vcf.gz" "~{filebase}.imp.vcf.gz" "~{filebase}.imp.vcf.gz.tbi"
+      mv "~{filebase}.imp.log" "logs/~{filebase}.imp.log"
     fi
     ~{if (!out_ds) then
       "mv \"" + filebase + ".imp.bcf\" \"" + filebase + ".tmp.bcf\"\n" +
@@ -702,12 +713,166 @@ task vcf_impute {
       "tee \"" + filebase + ".imp.bcf\" | \\\n" +
       "bcftools index --force --output \"" + filebase + ".imp.bcf.csi\"\n" +
       "rm \"" + filebase + ".tmp.bcf\" fai.vcf tmp.vcf \"" + basename(select_first([ref_fasta_fai])) + "\""
-      else ""}
+    else ""}
     ~{if (out_ds && !defined(ref_fasta_fai)) then
       "bcftools index --force \"" + filebase + ".imp.bcf\""
-      else ""}
+    else ""}
     rm "~{basename(pgt_file)}.csi" genetic_map.txt
-    echo "~{sep("\n", select_all([pgt_file, genetic_map_file, panel_genotypes_file, panel_genotypes_idx, panel_sites_file, panel_sites_idx]))}" | \
+    echo "~{sep("\n", select_all([pgt_file, genetic_map_file, panel_bcf_file, panel_csi_file, panel_bref3_file]))}" | \
+      sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm
+  >>>
+
+  output {
+    File imp_vcf_file = filebase + ".imp.bcf"
+    File imp_vcf_idx = filebase + ".imp.bcf.csi"
+    File log = "logs/" + filebase + ".imp.log"
+  }
+
+  runtime {
+    docker: docker
+    cpu: cpu
+    disks: "local-disk " + disk_size + " HDD"
+    memory: memory + " GiB"
+    preemptible: preemptible
+    maxRetries: maxRetries
+  }
+}
+
+task init_impute5_panel {
+  input {
+    File vcf_file
+    File vcf_idx
+    String chr
+    Float maf = 1.0 / 32.0 # suggested by Simone Rubinacci
+
+    String docker
+    Int cpu = 1
+    Int? disk_size_override
+    Float memory = 3.5
+    Int preemptible = 1
+    Int maxRetries = 0
+  }
+
+  Float vcf_size = size(vcf_file, "GiB")
+  Int disk_size = select_first([disk_size_override, ceil(10.0 + 3.0 * vcf_size)])
+  String filebase = basename(basename(vcf_file, ".bcf"), ".vcf.gz")
+
+  command <<<
+    set -euo pipefail
+    mv "~{vcf_file}" "~{vcf_idx}" .
+    xcftools view \
+      ~{if cpu > 1 then "--thread " + cpu else ""} \
+      --input "~{basename(vcf_file)}" \
+      --region ~{chr} \
+      --maf ~{maf} \
+      --output "~{filebase}.xcf.bcf" \
+      --format sh \
+      1>&2
+    bcftools query -i 'SEEK[0]>4' -f "\n" "~{filebase}.xcf.bcf" | wc -l
+    rm "~{basename(vcf_file)}" "~{basename(vcf_idx)}"
+  >>>
+
+  output {
+    Int n_markers = read_int(stdout())
+    File fam_file = filebase + ".xcf.fam"
+    File bcf_file = filebase + ".xcf.bcf"
+    File csi_file = filebase + ".xcf.bcf.csi"
+    File bin_file = filebase + ".xcf.bin"
+  }
+
+  runtime {
+    docker: docker
+    cpu: cpu
+    disks: "local-disk " + disk_size + " HDD"
+    memory: memory + " GiB"
+    preemptible: preemptible
+    maxRetries: maxRetries
+  }
+}
+
+# hack https://github.com/samtools/bcftools/issues/1425 is employed in the end to fix the header
+# the command requires BCFtools 1.14 due to bug https://github.com/samtools/bcftools/issues/1497
+task vcf_impute5 {
+  input {
+    Int n_smpls
+    Int n_markers
+    File pgt_file
+    Int n_x_chr
+    File genetic_map_file
+    Int n_panel_smpls
+    Int n_panel_markers_common
+    Int n_panel_markers_total
+    File panel_fam_file
+    File panel_bcf_file
+    File panel_csi_file
+    File panel_bin_file
+    String region
+    String buffer_region
+    String chr
+    Boolean mhc = false # requires additional memory if imputing the MHC region
+    Boolean out_ds = true
+    Boolean out_gp = false
+    Boolean out_ap = false
+    String? impute_extra_args
+
+    String docker
+    Int? cpu_override
+    Int? disk_size_override
+    Float? mult_override
+    Float? memory_override
+    Int preemptible = 1
+    Int maxRetries = 0
+  }
+
+  Float pgt_size = size(pgt_file, "GiB")
+  Float bin_size = size(panel_bin_file, "GiB")
+  Float panel_size = size(panel_fam_file, "GiB") + size(panel_bcf_file, "GiB") + size(panel_csi_file, "GiB") + bin_size
+  Int disk_size = select_first([disk_size_override, ceil(10.0 + 3.0 * pgt_size + (1.0 + 2.0 * n_smpls / n_panel_smpls) * panel_size)])
+  # Float mult = select_first([mult_override, 26.0 * (if mhc then 2.0 else if chr == "X" || chr == "chrX" then 1.5 else 1.0)])
+  Float mult = select_first([mult_override, 30.0])
+  Float memory = select_first([memory_override, 3.5 + 2.0 * bin_size + mult * n_smpls * n_panel_markers_common / 1024 / 1024 / 1024])
+  Int cpu = select_first([cpu_override, if memory > 6.5 then 2 * ceil(memory / 13) else 1])
+  String filebase = basename(basename(pgt_file, ".bcf"), ".vcf.gz")
+
+  command <<<
+    set -euo pipefail
+    echo "~{sep("\n", select_all([pgt_file, genetic_map_file, panel_fam_file, panel_bcf_file, panel_csi_file, panel_bin_file]))}" | \
+      tr '\n' '\0' | xargs -0 mv -t .
+    bcftools index --force "~{basename(pgt_file)}"
+    n_markers=$(bcftools isec \
+      --no-version \
+      --output-type u \
+      --nfiles 2 \
+      --write 1 \
+      "~{basename(pgt_file)}" \
+      "~{basename(panel_bcf_file)}" | \
+      bcftools query --format "\n" | wc -l)
+    if [ $n_markers == 0 ]; then
+      cp "~{basename(pgt_file)}" "~{filebase}.imp.bcf"
+      mv "~{basename(pgt_file)}.csi" "~{filebase}.imp.bcf.csi"
+    else
+      mkdir logs
+      chr=~{chr}; zcat "~{basename(genetic_map_file)}" | \
+      sed 's/^~{n_x_chr}/X/' | awk -v chr=$chr -v OFS="\\t" 'BEGIN {print "pos","chr","cM"}
+        $1==chr || "chr"$1==chr {print $2,chr,$4}' > genetic_map.txt
+      impute5 \
+        --h "~{basename(panel_bcf_file)}" \
+        --m genetic_map.txt \
+        --g "~{basename(pgt_file)}" \
+        --r ~{region} \
+        --buffer-region ~{buffer_region} \
+        --l "logs/~{filebase}.imp.log" \
+        ~{if !out_gp then "--no-out-gp-field" else ""} \
+        ~{if !out_ds then "--no-out-ds-field" else ""} \
+        ~{if out_ap then "--out-ap-field" else ""} \
+        --o "~{filebase}.imp.bcf" \
+        ~{if cpu > 1 then "--threads " + cpu else ""} \
+        --estimate-mem-usage \
+        ~{if defined(impute_extra_args) then impute_extra_args else ""} \
+        1>&2
+      rm "~{basename(pgt_file)}.csi" genetic_map.txt
+    fi
+    echo "~{sep("\n", select_all([pgt_file, genetic_map_file, panel_fam_file, panel_bcf_file, panel_csi_file, panel_bin_file]))}" | \
       sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm
   >>>
 
@@ -752,6 +917,7 @@ task vcf_concat {
       --no-version \
       --output-type b \
       --file-list $vcf_files \
+      --naive \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} | \
     tee "~{filebase}.bcf" | \
     bcftools index --force --output "~{filebase}.bcf.csi"
