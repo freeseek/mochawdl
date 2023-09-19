@@ -16,7 +16,7 @@ version development
 struct Reference {
   File fasta
   File fasta_fai
-  Int n_x_chr
+  String n_x_chr
   File? cyto_file
   String? chr_prefix
   Array[Int] len
