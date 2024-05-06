@@ -28,7 +28,7 @@ While WDL pipelines can be run with a Cromwell server alone, even on your laptop
 * [Setup an account](https://support.terra.bio/hc/en-us/articles/360034677651-Account-setup-and-exploring-Terra) with Terra associated with a billing account
 * Create a new Terra workspace
 * Find the [MoChA method](https://portal.firecloud.org/?return=terra#methods/mocha/mocha/) in the Broad Methods Repository and have it exported to your workspace (you can choose **sample_set** as Root Entity Type)
-* Setup resources for GRCh37 or GRCh38 (available for download [here](http://software.broadinstitute.org/software/mocha/)) by unpacking them in a directory in your own Google bucket, such as **gs://{google-bucket}/GRCh38/** and making sure that the **ref_path** variable points to that path
+* Setup resources for GRCh37 or GRCh38 (available for download [here](http://software.broadinstitute.org/software/mochawdl/)) by unpacking them in a directory in your own Google bucket, such as **gs://{google-bucket}/GRCh38/** and making sure that the **ref_path** variable points to that path
 * Once you know the Terra project you will use to run the pipeline, you can use the [SAM API](https://sam.dsde-prod.broadinstitute.org/) identify your Terra service account using the following commands:
 ```
 $ gcloud auth application-default login
@@ -245,9 +245,9 @@ if [ -z $SINGULARITY_CACHEDIR ];
 fi
 mkdir -p $CACHE_DIR
 DOCKER_REPOSITORY=us.gcr.io/mccarroll-mocha
-DOCKER_TAG=1.17-20230919
+DOCKER_TAG=1.20-20240505
 for docker in debian:stable-slim amancevice/pandas:slim \
-  DOCKER_REPOSITORY/{bcftools,autoconvert,iaap_cli,apt,r_mocha,eagle,shapeit4,impute5,beagle5,regenie}:$DOCKER_TAG; do
+  DOCKER_REPOSITORY/{bcftools,apt,r_mocha,shapeit4,shapeit5,impute5,beagle5,regenie}:$DOCKER_TAG; do
   DOCKER_NAME=$(sed -e 's/[^A-Za-z0-9._-]/_/g' <<< ${docker})
   IMAGE=$CACHE_DIR/$DOCKER_NAME.sif
   singularity pull $IMAGE docker://${docker}
@@ -460,6 +460,15 @@ engine {
 }
 ```
 
+* If you are running your jobs in a cloud environment other the United States one, you will want to specify your own docker image for localizing and delocalizing files on a virtual machine as explained [here](https://cromwell.readthedocs.io/en/stable/backends/Google/#custom-google-cloud-sdk-container) and using something like the following
+```
+google {
+  ...
+  cloud-sdk-image-url = "eu.gcr.io/google.com/cloudsdktool/cloud-sdk:434.0.0-alpine"
+  cloud-sdk-image-size-gb = 1
+}
+```
+
 Shared Configuration
 --------------------
 
@@ -475,8 +484,8 @@ webservice {
 akka {
   http {
     server {
-      request-timeout = 300s
-      idle-timeout = 300s
+      request-timeout = 3600s
+      idle-timeout = 3600s
     }
   }
 }
@@ -486,7 +495,7 @@ akka {
 services {
   MetadataService {
     config {
-      metadata-read-row-number-safety-threshold = 10000000
+      metadata-read-row-number-safety-threshold = 20000000
     }
   }
 }
@@ -609,6 +618,10 @@ $ java -jar cromwell-XY.jar run mocha.wdl -i {sample-set-id}.json -o options.jso
 * To read the metadata you can open the file in the Firefox browser:
 ```
 $ firefox metadata.json
+```
+* To only extract failure messages from the metadata:
+```
+$ jq .failures metadata.json > metadata.failures.json
 ```
 * To monitor the status of jobs submitted to the server or while running, you can use:
 ```

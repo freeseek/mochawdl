@@ -1,15 +1,15 @@
 version development
 
-## Copyright (c) 2021-2023 Giulio Genovese
+## Copyright (c) 2021-2024 Giulio Genovese
 ##
-## Version 2023-09-19
+## Version 2024-05-05
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs allelic shift imbalance analysis in a given region
 ##
 ## Cromwell version support
-## - Successfully tested on v85
+## - Successfully tested on v86
 ##
 ## Distributed under terms of the MIT License
 
@@ -22,8 +22,8 @@ struct Reference {
   Array[Int] len
   Array[Int] pcen
   Array[Int] qcen
-  File? gff3_file # https://ftp.ensembl.org/pub/current_gff3/homo_sapiens/
-  File? rsid_vcf_file # https://ftp.ncbi.nih.gov/snp/latest_release/VCF/
+  File? gff3_file # http://ftp.ensembl.org/pub/current_gff3/homo_sapiens/
+  File? rsid_vcf_file # http://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/
   File? rsid_vcf_idx
 }
 
@@ -56,8 +56,8 @@ workflow shift {
     Boolean plot = true
     String basic_bash_docker = "debian:stable-slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.17-20230919"
-    String r_mocha_docker = "r_mocha:1.17-20230919"
+    String bcftools_docker = "bcftools:1.20-20240505"
+    String r_mocha_docker = "r_mocha:1.20-20240505"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -304,9 +304,7 @@ task vcf_summary {
         --samples-file "~{filebase}.cases.lines" \
         --force-samples \
         ~{if drop_genotypes then "--drop-genotypes" else ""} | \
-      bcftools view --no-version --output-type b --include 'sum(~{as_id})>0' | \
-      tee "~{filebase}.$pheno_name.~{ext_string}.bcf" | \
-      bcftools index --force --output "~{filebase}.$pheno_name.~{ext_string}.bcf.csi"
+      bcftools view --no-version --output "~{filebase}.$pheno_name.~{ext_string}.bcf" --output-type b --include 'sum(~{as_id})>0' --write-index
       rm "~{filebase}.pheno.tsv" "~{filebase}.samples.lines" ~{if fisher_exact then "\"" + filebase + ".controls.lines\" " else ""}"~{filebase}.cases.lines"
     done
     echo "~{sep("\n", select_all([vcf_file, vcf_idx, keep_samples_file, remove_samples_file, pheno_tsv_file]))}" | \
@@ -382,31 +380,32 @@ task vcf_merge {
     else ""} \
     bcftools +mochatools \
       --no-version \
-      --output-type b \
+      --output-type ~{if defined(gff3_file) then "u" else "b"} \
       -- --test ~{as_id} \
-      ~{if phred_score then "--phred" else ""} | \
-    ~{if defined(gff3_file) then
-      "bcftools csq \\\n" +
-      "  --no-version \\\n" +
-      "  --output-type b \\\n" +
-      "  --fasta-ref \"" + basename(select_first([ref_fasta])) + "\" \\\n" +
-      "  --gff-annot \"" + basename(select_first([gff3_file])) + "\" \\\n" +
-      "  --trim-protein-seq 1 \\\n" +
-      "  --custom-tag CSQ \\\n" +
-      "  --local-csq \\\n" +
-      "  --ncsq 64 \\\n" +
-      "  --samples - | \\\n" else ""}tee "~{filebase + if defined(rsid_vcf_file) then ".tmp" else ""}.bcf" | \
-    bcftools index --force --output "~{filebase + if defined(rsid_vcf_file) then ".tmp" else ""}.bcf.csi"
+      ~{if phred_score then "--phred" else ""} \
+    ~{if defined(gff3_file) then "  | \\\n" +
+    "bcftools csq \\\n" +
+    "  --no-version \\\n" +
+    "  --output-type b \\\n" +
+    "  --fasta-ref \"" + basename(select_first([ref_fasta])) + "\" \\\n" +
+    "  --gff-annot \"" + basename(select_first([gff3_file])) + "\" \\\n" +
+    "  --trim-protein-seq 1 \\\n" +
+    "  --custom-tag CSQ \\\n" +
+    "  --local-csq \\\n" +
+    "  --ncsq 64 \\\n" +
+    "  --samples -" else ""} \
+      --output "~{filebase + if defined(rsid_vcf_file) then ".tmp" else ""}.bcf" \
+      --write-index
     ~{if defined(rsid_vcf_file) then
       "bcftools annotate \\\n" +
       "  --no-version \\\n" +
       "  --annotations \"" + basename(select_first([rsid_vcf_file])) + "\" \\\n" +
       "  --columns RS \\\n" +
+      "  --output \"" + filebase + ".bcf\" \\\n" +
       "  --output-type b \\\n" +
       "  --regions \"" + region + "\" \\\n" +
-      "  \"" + filebase + ".tmp.bcf\" | \\\n" +
-      "  tee \"" + filebase + ".bcf\" | \\\n" +
-      "  bcftools index --force --output \"" + filebase + ".bcf.csi\"\n" +
+      "  \"" + filebase + ".tmp.bcf\" \\\n" +
+      "  --write-index\n" +
       "  rm \"" + filebase + ".tmp.bcf\" \"" + filebase + ".tmp.bcf.csi\""
       else ""}
     (echo "CHROM GENPOS ALLELE0 ALLELE1 N INFO N_CASES BETA SE LOG10P A1FREQ AC_ALLELE1";
@@ -415,9 +414,7 @@ task vcf_merge {
       nc=$8+$9; es=log(($9+.5)/($8+.5)); se=sqrt(1/($8+.5)+1/($9+.5)); lp=$10/10; af=$6/$5/2; ac=$6;
       print $1,$2,$3,$4,$5,si,nc,es,se,lp,af,ac}') | \
     bcftools +munge --no-version -c REGENIE --fai "~{basename(fasta_fai)}" -s ~{pheno_name} | \
-    bcftools merge --no-version --merge none --no-index --output-type b "~{filebase}.bcf" - | \
-    tee "~{filebase}.gwas.bcf" | \
-    bcftools index --force --output "~{filebase}.gwas.bcf.csi"
+    bcftools merge --no-version --merge none --no-index --output "~{filebase}.gwas.bcf" --output-type b "~{filebase}.bcf" --write-index -
     bcftools query -f "\n" -i 'sum(~{as_id})>1' "~{filebase}.gwas.bcf" | wc -l
     rm "~{filebase}.bcf" "~{filebase}.bcf.csi"
     echo "~{sep("\n", select_all([ref_fasta, fasta_fai, gff3_file, rsid_vcf_file, rsid_vcf_idx]))}" | \

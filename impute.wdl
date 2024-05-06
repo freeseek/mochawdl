@@ -1,15 +1,15 @@
 version development
 
-## Copyright (c) 2021-2023 Giulio Genovese
+## Copyright (c) 2021-2024 Giulio Genovese
 ##
-## Version 2023-09-19
+## Version 2024-05-05
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs impute5 or beagle5 on a set of VCFs
 ##
 ## Cromwell version support
-## - Successfully tested on v85
+## - Successfully tested on v86
 ##
 ## Distributed under terms of the MIT License
 
@@ -60,9 +60,9 @@ workflow impute {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.17-20230919"
-    String impute5_docker = "impute5:1.17-20230919"
-    String beagle5_docker = "beagle5:1.17-20230919"
+    String bcftools_docker = "bcftools:1.20-20240505"
+    String impute5_docker = "impute5:1.20-20240505"
+    String beagle5_docker = "beagle5:1.20-20240505"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -570,10 +570,10 @@ task init_beagle5_panel {
       "~{basename(vcf_file)}" | \
     bcftools annotate \
       --no-version \
+      --output "~{filebase}.sites.bcf" \
       --output-type b \
-      --remove ID,QUAL,FILTER,INFO,^FMT/GT | \
-    tee "~{filebase}.sites.bcf" | \
-    bcftools index --force --output "~{filebase}.sites.bcf.csi"
+      --remove ID,QUAL,FILTER,INFO,^FMT/GT \
+      --write-index
     ~{if chr != "X" && chr != "chrX" then
       "bcftools view --no-version \"" + basename(vcf_file) + "\""
     else
@@ -682,11 +682,11 @@ task vcf_beagle5 {
       bcftools index --force --tbi "~{filebase}.imp.vcf.gz"
       bcftools view \
         --no-version \
+        --output "~{filebase}.imp.bcf" \
         --output-type b \
         --regions ~{region} \
-        "~{filebase}.imp.vcf.gz" | \
-      tee "~{filebase}.imp.bcf" | \
-      bcftools index --force --output "~{filebase}.imp.bcf.csi"
+        "~{filebase}.imp.vcf.gz" \
+        --write-index
       rm "~{filebase}.vcf.gz" "~{filebase}.imp.vcf.gz" "~{filebase}.imp.vcf.gz.tbi"
       mv "~{filebase}.imp.log" "logs/~{filebase}.imp.log"
     fi
@@ -694,11 +694,11 @@ task vcf_beagle5 {
       "mv \"" + filebase + ".imp.bcf\" \"" + filebase + ".tmp.bcf\"\n" +
       "bcftools annotate \\\n" +
       "  --no-version \\\n" +
+      "  --output \"" + filebase + ".imp.bcf\" \\\n" +
       "  --output-type b \\\n" +
       "  --remove FMT/DS \\\n" +
-      "  \"" + filebase + ".tmp.bcf\" | \\\n" +
-      "tee \"" + filebase + ".imp.bcf\" | \\\n" +
-      "bcftools index --force --output \"" + filebase + ".imp.bcf.csi\"\n" +
+      "  \"" + filebase + ".tmp.bcf\" \\\n" +
+      "  --write-index\n" +
       "rm \"" + filebase + ".tmp.bcf\""
       else ""}
     ~{if defined(ref_fasta_fai) then
@@ -708,10 +708,10 @@ task vcf_beagle5 {
       "mv \"" + filebase + ".imp.bcf\" \"" + filebase + ".tmp.bcf\"\n" +
       "bcftools concat \\\n" +
       "  --no-version \\\n" +
+      "  --output \"" + filebase + ".imp.bcf\" \\\n" +
       "  --output-type b \\\n" +
-      "  fai.vcf \"" + filebase + ".tmp.bcf\" | \\\n" +
-      "tee \"" + filebase + ".imp.bcf\" | \\\n" +
-      "bcftools index --force --output \"" + filebase + ".imp.bcf.csi\"\n" +
+      "  fai.vcf \"" + filebase + ".tmp.bcf\" \\\n" +
+      "  --write-index\n" +
       "rm \"" + filebase + ".tmp.bcf\" fai.vcf tmp.vcf \"" + basename(select_first([ref_fasta_fai])) + "\""
     else ""}
     ~{if (out_ds && !defined(ref_fasta_fai)) then
@@ -813,6 +813,8 @@ task vcf_impute5 {
     Boolean out_ds = true
     Boolean out_gp = false
     Boolean out_ap = false
+    Int min_markers = 10
+    Int low_markers_kpbwt = 10000000
     String? impute_extra_args
 
     String docker
@@ -851,6 +853,7 @@ task vcf_impute5 {
       cp "~{basename(pgt_file)}" "~{filebase}.imp.bcf"
       mv "~{basename(pgt_file)}.csi" "~{filebase}.imp.bcf.csi"
     else
+      if [ $n_markers -le ~{min_markers} ]; then opt="--Kpbwt ~{low_markers_kpbwt}"; else opt=""; fi
       mkdir logs
       chr=~{chr}; zcat "~{basename(genetic_map_file)}" | \
       sed 's/^~{n_x_chr}/X/' | awk -v chr=$chr -v OFS="\\t" 'BEGIN {print "pos","chr","cM"}
@@ -869,6 +872,7 @@ task vcf_impute5 {
         ~{if cpu > 1 then "--threads " + cpu else ""} \
         --estimate-mem-usage \
         ~{if defined(impute_extra_args) then impute_extra_args else ""} \
+        $opt \
         1>&2
       rm "~{basename(pgt_file)}.csi" genetic_map.txt
     fi
@@ -892,6 +896,7 @@ task vcf_impute5 {
   }
 }
 
+# --naive cannot be combined with --write-index
 task vcf_concat {
   input {
     Array[File]+ vcf_files
@@ -915,12 +920,11 @@ task vcf_concat {
     sed -i 's/^.*\///' $vcf_files
     bcftools concat \
       --no-version \
+      --output "~{filebase}.bcf" \
       --output-type b \
       --file-list $vcf_files \
-      --naive \
-      ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} | \
-    tee "~{filebase}.bcf" | \
-    bcftools index --force --output "~{filebase}.bcf.csi"
+      ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
+      --write-index
     cat $vcf_files | tr '\n' '\0' | xargs -0 rm
     bcftools query --list-samples "~{filebase}.bcf" | wc -l
   >>>
@@ -961,7 +965,7 @@ task vcf_extend {
     Int preemptible = 1
     Int maxRetries = 0
 
-    Float mult = 0.2
+    Float mult = 0.5
   }
 
   Float vcf_size = size(vcf_file, "GiB")
@@ -988,21 +992,21 @@ task vcf_extend {
       "~{input_vcf_file}" | \
     bcftools +extendFMT \
       --no-version \
+      --output "~{filebase}.~{ext_string}.pgt.bcf" \
       --output-type b \
       --format "~{format_id}" \
       --phase \
-      --dist ~{dist} | \
-    tee "~{filebase}.~{ext_string}.pgt.bcf" | \
-    bcftools index --force --output "~{filebase}.~{ext_string}.pgt.bcf.csi"
+      --dist ~{dist} \
+      --write-index
     bcftools annotate \
       --no-version \
+      --output "~{filebase}.~{ext_string}.bcf" \
       --output-type b \
       --annotations "~{filebase}.~{ext_string}.pgt.bcf" \
       --columns "FMT/~{format_id}" \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
-      "~{input_vcf_file}" | \
-    tee "~{filebase}.~{ext_string}.bcf" | \
-    bcftools index --force --output "~{filebase}.~{ext_string}.bcf.csi"
+      "~{input_vcf_file}" \
+      --write-index
     rm "~{filebase}.~{ext_string}.pgt.bcf" "~{filebase}.~{ext_string}.pgt.bcf.csi"
     rm "~{input_vcf_file}"
     rm "~{input_vcf_idx}"

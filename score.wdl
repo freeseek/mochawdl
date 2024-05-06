@@ -1,15 +1,15 @@
 version development
 
-## Copyright (c) 2021-2023 Giulio Genovese
+## Copyright (c) 2021-2024 Giulio Genovese
 ##
-## Version 2023-09-19
+## Version 2024-05-05
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow computes poligenic risk scores
 ##
 ## Cromwell version support
-## - Successfully tested on v85
+## - Successfully tested on v86
 ##
 ## Distributed under terms of the MIT License
 
@@ -44,8 +44,8 @@ workflow score {
     String? include_str
     String basic_bash_docker = "debian:stable-slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.17-20230919"
-    String r_mocha_docker = "r_mocha:1.17-20230919"
+    String bcftools_docker = "bcftools:1.20-20240505"
+    String r_mocha_docker = "r_mocha:1.20-20240505"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""

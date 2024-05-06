@@ -1,15 +1,15 @@
 version development
 
-## Copyright (c) 2021-2023 Giulio Genovese
+## Copyright (c) 2021-2024 Giulio Genovese
 ##
-## Version 2023-09-19
+## Version 2024-05-05
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs association analyses with REGENIE and PLINK2
 ##
 ## Cromwell version support
-## - Successfully tested on v85
+## - Successfully tested on v86
 ##
 ## Distributed under terms of the MIT License
 
@@ -24,7 +24,7 @@ struct Reference {
   File genetic_map_file
   String? pca_exclusion_regions
   File? gff3_file # https://ftp.ensembl.org/pub/current_gff3/homo_sapiens/
-  File? rsid_vcf_file # https://ftp.ncbi.nih.gov/snp/latest_release/VCF/
+  File? rsid_vcf_file # https://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/
   File? rsid_vcf_idx
 }
 
@@ -93,9 +93,9 @@ workflow assoc {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.17-20230919"
-    String regenie_docker = "regenie:1.17-20230919"
-    String r_mocha_docker = "r_mocha:1.17-20230919"
+    String bcftools_docker = "bcftools:1.20-20240505"
+    String regenie_docker = "regenie:1.20-20240505"
+    String r_mocha_docker = "r_mocha:1.20-20240505"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -455,7 +455,7 @@ workflow assoc {
                 assoc_file = regenie_concat.file,
                 genome = if ref_name == "GRCh38" || ref_name == "GRCh37" then ref_name else None,
                 cyto_file = ref.cyto_file,
-		autosome_ct = if ref.n_x_chr == 23 then None else ref.n_x_chr - 1,
+                autosome_ct = if ref.n_x_chr == 23 then None else ref.n_x_chr - 1,
                 filebase = basename(filebase + "." + select_first([regenie_suffix])[idx], ".gz"),
                 docker = docker_repository_with_sep + r_mocha_docker
           }
@@ -520,7 +520,7 @@ workflow assoc {
               assoc_file = plink_concat.file,
               genome = if ref_name == "GRCh38" || ref_name == "GRCh37" then ref_name else None,
               cyto_file = ref.cyto_file,
-	      autosome_ct = if ref.n_x_chr == 23 then None else ref.n_x_chr - 1,
+              autosome_ct = if ref.n_x_chr == 23 then None else ref.n_x_chr - 1,
               min_af = cis_plot_min_af,
               filebase = filebase + "." + plink_pheno_names[idx] + ".glm." + (if binary then "logistic.hybrid" else "linear"),
               docker = docker_repository_with_sep + r_mocha_docker
@@ -935,7 +935,7 @@ task pgt_prune {
     awk 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}
       NR>1 {id=$(f["sample_id"]); gsub(" ","~{space_character}",id);
       print 0,id,toupper(substr($(f["computed_gender"]),1,1))}' "~{basename(sample_tsv_file)}" | \
-      sed 's/U$/0/' > "~{filebase}.sex"
+      sed 's/U$/0/;s/K$/1/' > "~{filebase}.sex"
     rm "~{basename(sample_tsv_file)}"
     bcftools +fill-tags --no-version -Ou --include 'sum(AC)>=~{min_mac} && AN-sum(AC)>=~{min_mac} && MAF>=~{min_maf}' "~{basename(vcf_file)}" -- --tags AC,AN,MAF | \
     bcftools annotate --no-version -Ob0 --set-id "%VKX" --remove FILTER,INFO,^FMT/GT | \
@@ -1349,6 +1349,7 @@ task serialize_lines {
 
 # number of variants and sample should be input here
 # option psam-cols=fid,sex required due to https://github.com/rgcgithub/regenie/issues/105
+#
 # PLINK2 tries to access more memory than assigned https://groups.google.com/g/plink2-users/c/eLxA5JCwRH0/m/gZmm8RhJAgAJ
 # PLINK2 unfortunately needs to read a VCF file twice https://groups.google.com/g/plink2-users/c/hsByNOklyA0/m/ZUHf1MpvAQAJ
 # PLINK2 unfortunately cannot split PAR with non-human genomes https://groups.google.com/g/plink2-users/c/88W9O02WXfI
@@ -1368,11 +1369,16 @@ task vcf2pgen {
     Float memory = 3.5
     Int preemptible = 1
     Int maxRetries = 0
+
+    Float mult = 4.0 # this is to make sure that there is space for the .bcf, the -temporary.pgen, and the .pgen files
+    # notice that the .pgen can occupy more space than the .bcf as each encoded dosage requires 2 bytes to be encoded
+    # and only dosages that have dosage level identical to their respective genotypes are not encoded
+    # see https://docs.juliahub.com/PGENFiles/76R2z/0.1.0/PGEN_description/#Dosages-1
   }
 
   String filebase = basename(basename(vcf_file, ".bcf"), ".vcf.gz")
   Float vcf_size = size(vcf_file, "GiB")
-  Int disk_size = select_first([disk_size_override, ceil(10.0 + 3.0 * vcf_size)])
+  Int disk_size = select_first([disk_size_override, ceil(10.0 + mult * vcf_size)])
 
   command <<<
     set -euo pipefail
@@ -1380,7 +1386,8 @@ task vcf2pgen {
     mv "~{sample_tsv_file}" .
     awk 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}
       NR>1 {id=$(f["sample_id"]); gsub(" ","~{space_character}",id);
-      print 0,id,$(f["computed_gender"])}' "~{basename(sample_tsv_file)}" > "~{filebase}.sex"
+      print 0,id,$(f["computed_gender"])}' "~{basename(sample_tsv_file)}" | \
+      sed 's/U$/0/;s/K$/1/' > "~{filebase}.sex"
     bcftools query -l "~{basename(vcf_file)}" | wc -l
     plink2 \
       --threads ~{cpu} \
@@ -1539,6 +1546,7 @@ task regenie_step2 {
   }
 }
 
+# as the VCF to be concatenated can be pretty large and this is only run once, we avoid preemptible computing
 task vcf_concat {
   input {
     Array[File]+ vcf_files
@@ -1553,7 +1561,7 @@ task vcf_concat {
     Int cpu = 1
     Int? disk_size_override
     Float memory = 3.5
-    Int preemptible = 1
+    Int preemptible = 0
     Int maxRetries = 0
   }
 
@@ -1576,19 +1584,20 @@ task vcf_concat {
       --no-version \
       --output-type ~{if defined(gff3_file) then "u" else "b"} \
       --file-list $vcf_files \
-      ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} | \
-    ~{if defined(gff3_file) then
-      "bcftools csq \\\n" +
-      "  --no-version \\\n" +
-      "  --output-type b \\\n" +
-      "  --fasta-ref \"" + basename(select_first([ref_fasta])) + "\" \\\n" +
-      "  --gff-annot \"" + basename(select_first([gff3_file])) + "\" \\\n" +
-      "  --trim-protein-seq 1 \\\n" +
-      "  --custom-tag CSQ \\\n" +
-      "  --local-csq \\\n" +
-      "  --ncsq 64 \\\n" +
-      "  --samples - | \\\n" else ""}tee "~{filebase + if defined(rsid_vcf_file) then ".tmp" else ""}.bcf" | \
-    bcftools index --force --output "~{filebase + if defined(rsid_vcf_file) then ".tmp" else ""}.bcf.csi"
+      ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
+    ~{if defined(gff3_file) then "  | \\\n" +
+    "bcftools csq \\\n" +
+    "  --no-version \\\n" +
+    "  --output-type b \\\n" +
+    "  --fasta-ref \"" + basename(select_first([ref_fasta])) + "\" \\\n" +
+    "  --gff-annot \"" + basename(select_first([gff3_file])) + "\" \\\n" +
+    "  --trim-protein-seq 1 \\\n" +
+    "  --custom-tag CSQ \\\n" +
+    "  --local-csq \\\n" +
+    "  --ncsq 64 \\\n" +
+    "  --samples -" else ""} \
+      --output "~{filebase + if defined(rsid_vcf_file) then ".tmp" else ""}.bcf" \
+      --write-index
     ~{if defined(ref_fasta) then "rm \"" + basename(select_first([ref_fasta])) + "\"" else ""}
     ~{if defined(fasta_fai) then "rm \"" + basename(select_first([fasta_fai])) + "\"" else ""}
     ~{if defined(gff3_file) then "rm \"" + basename(select_first([gff3_file])) + "\"" else ""}
@@ -1598,10 +1607,10 @@ task vcf_concat {
       "  --no-version \\\n" +
       "  --annotations \"" + basename(select_first([rsid_vcf_file])) + "\" \\\n" +
       "  --columns RS \\\n" +
+      "  --output \"" + filebase + ".bcf\" \\\n" +
       "  --output-type b \\\n" +
-      "  \"" + filebase + ".tmp.bcf\" | \\\n" +
-      "  tee \"" + filebase + ".bcf\" | \\\n" +
-      "  bcftools index --force --output \"" + filebase + ".bcf.csi\"\n" +
+      "  \"" + filebase + ".tmp.bcf\" \\\n" +
+      "  --write-index\n" +
       "  rm \"" + filebase + ".tmp.bcf\" \"" + filebase + ".tmp.bcf.csi\" \"" + basename(select_first([rsid_vcf_file])) + "\""
       else ""}
     ~{if defined(rsid_vcf_idx) then "rm \"" + basename(select_first([rsid_vcf_idx])) + "\"" else ""}
@@ -1695,8 +1704,8 @@ task assoc_plot {
     mv "~{assoc_file}" .
     ~{if defined(cyto_file) then "mv \"" + select_first([cyto_file]) + "\" ." else ""}
     assoc_plot.R \
-      ~{if defined(genome) then "--genome \"" + select_first([genome]) + "\"" else ""} \
-      ~{if defined(cyto_file) then "--cytoband \"" + basename(select_first([cyto_file])) + "\"" else ""} \
+      ~{if defined(cyto_file) then "--cytoband \"" + basename(select_first([cyto_file])) + "\"" else
+        if defined(genome) then "--genome \"" + select_first([genome]) + "\"" else ""} \
       ~{if defined(autosome_ct) then "--nauto " + select_first([autosome_ct]) else ""} \
       ~{if defined(min_af) then "--min-af " + select_first([min_af]) else ""} \
       --tbx "~{basename(assoc_file)}" \
@@ -1722,6 +1731,7 @@ task assoc_plot {
 # use of !(a!=b) due to bug Cromwell team will not fix: https://github.com/broadinstitute/cromwell/issues/5602
 # plink2 will return error code 7 when covariate-only Firth regression fails to converge or when variance inflation factor is too high
 # plink2 will return error code 13 when no diploid variants remain for --glm hetonly
+# when PLINK2 updates to version Mar 18 2024 or newer, you can remove the single-prec-cc otions https://groups.google.com/g/plink2-users/c/4oKzPt_Xi74/m/z--hBJV-AgAJ
 task plink_glm {
   input {
     String chr_num
@@ -1781,7 +1791,7 @@ task plink_glm {
       --1 --pheno "~{basename(pheno_file)}" \
       --pheno-name ~{pheno_name} \
       --require-pheno \
-      --glm zs log10 hetonly hide-covar~{if !defined(loco_file) && !defined(covar_file) then " allow-no-covars" else ""} cc-residualize cols=+a1freq,+machr2 \
+      --glm zs log10 hetonly hide-covar~{if !defined(loco_file) && !defined(covar_file) then " allow-no-covars" else ""} cc-residualize single-prec-cc cols=+a1freq,+machr2 \
       ~{if defined(max_vif) then "--vif " + select_first([max_vif]) else ""} \
       ~{if defined(max_corr) then "--max-corr " + select_first([max_corr]) else ""} \
       ~{if defined(plink_extra_args) then plink_extra_args else ""} \

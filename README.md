@@ -27,7 +27,7 @@ This page contains instructions for how to run the MoChA WDL pipelines to detect
 MoChA pipeline
 ==============
 
-The MoChA pipeline first runs Illumina\'s GenCall or Affymetrix\'s Axiom genotyping algorithms, then gtc2vcf to format Illumina or Affymetrix genotype data in more compliant VCF containers, then runs [SHAPEIT5](https://odelaneau.github.io/shapeit5/) to phase genotypes across overlapping genome windows, and finally it runs MoChA to detect mosaic chromosomal alterations. It can also be used to analyze whole genome sequencing data. The workflow also allows for automatic realigning of manifest files to a genome reference of choice making it effortless to use GRCh38 even when GRCh38 manifest files are not available from the array manufacturer
+The MoChA pipeline first runs Illumina\'s GenCall or Affymetrix\'s Axiom genotyping algorithms, then BCFtools/gtc2vcf or BCFtools/affy2vcf to format Illumina or Affymetrix genotype data in more compliant VCF containers, then runs [SHAPEIT5](https://odelaneau.github.io/shapeit5/) to phase genotypes across overlapping genome windows, and finally it runs MoChA to detect mosaic chromosomal alterations. It can also be used to analyze whole genome sequencing data. The workflow also allows for automatic realigning of manifest files to a genome reference of choice making it effortless to use GRCh38 even when GRCh38 manifest files are not available from the array manufacturer
 
 Input modes
 -----------
@@ -47,8 +47,6 @@ Due to different scenarios for how DNA microarray data is made available, the Mo
 | **pvcf** | phased variant call format files (one per batch)   |
 
 If the **mode** variable is not set to be one of these seven values, the behavior will be undefined. Although we advise against it, if you have an Illumina GenomeStudio file and no other options to access the raw data, you can convert the file to a compliant VCF using [gtc2vcf](https://github.com/freeseek/gtc2vcf) and then use the WDL pipeline through the **vcf** mode. However, in this scenario there is no way to select a genome reference different from the one chosen when the GenomeStudio file was created
-
-Notice that if you want to use the **idat** mode, this requires to run either the [Illumina Array Analysis Platform](https://support.illumina.com/array/array_software/illumina-array-analysis-platform/downloads.html) Genotyping Command Line Interface or the [Illumina AutoConvert](https://support.illumina.com/array/array_software/beeline/downloads.html) Software. Neither software is free (see [EULA](https://support.illumina.com/downloads/iaap-genotyping-orchestrated-workflow.html)) and both are covered by a [patent](https://patents.google.com/patent/US7035740) expiring in 2024 so check first to make sure you are allowed to run this software. Similarly, while MoChA is completely open source and released under the MIT license, there is a [patent](https://patents.google.com/patent/WO2019079493) that covers the method. However, the use of MoChA for research purposes is unrestricted
 
 You can run the pipeline all the way to the initial conversion to unphased VCF without phasing by setting the **target** variable to **vcf** or all the way to phased VCF without running MoChA by setting the **target** variable to **pvcf**. You can then input these VCFs back into the pipeline using, respectively, modes **vcf** or **pvcf**, although you will need to provide information about **computed_gender** and **call_rate** that are generated during the conversion to VCF. If you want to run the pipeline on data from whole genome sequencing, then you can use the **vcf** mode while making sure to selecte the **wgs** boolean variable appropriately. VCFs from whole genome sequencing data require specific handling when being merged and phased and we do not advise to use the pipeline on single sample whole genomes sequencing VCFs, as they don't record any information at sites where the sample is homozygous reference
 
@@ -78,7 +76,7 @@ Allowed columns in the sample table:
 | sample_id       |         | req. | req. | req. | req  | req. | req. | req. |
 | batch_id        |         | req. | req. | req. | req  | req. |      |      |
 | computed_gender |         |      |      |      |      |      | req. | req. |
-| call_rate       |         |      |      |      |      |      | req. |      |
+| call_rate       |         |      |      |      |      |      | !wgs |      |
 | green_idat      | allowed | req. |      |      |      |      |      |      |
 | red_idat        | allowed | req. |      |      |      |      |      |      |
 | gtc             | allowed |      | req. |      |      |      |      |      |
@@ -112,6 +110,7 @@ If you are using the pipeline in **vcf** or **pvcf** mode you have to supply **c
 paste -d $'\t' sample_id.lines computed_gender.lines | \
 paste -d $'\t' - call_rate.lines) > sample.tsv
 ```
+If you are using the pipeline with VCFs from whole genome sequencing and you set the **wgs*8 option to **true** you can omit the **call_rate** column
 
 Allowed columns in the batch table:
 
@@ -164,7 +163,7 @@ The following are the primary options that you can set in the main input json fi
 | wgs                    | Boolean? | whether the input VCF contains a high coverage whole genome sequencing data [false]              |
 | gtc_output             | Boolean? | whether to output the conversion from IDAT to GTC (only in **idat** mode) [false]                |
 | chp_output             | Boolean? | whether to output the conversion from CEL to CHP (only in **cel** mode) [false]                  |
-| idat_batch_size        | Int?     | largest batch size for conversion of IDAT files to GTC [48] (only in **idat** mode)              |
+| idat_batch_size        | Int?     | largest batch size for conversion of IDAT files to GTC [256] (only in **idat** mode)             |
 | gtc_batch_size         | Int?     | largest batch size for conversion of GTC files to VCF [1024] (only in **idat** and **gtc** mode) |
 | chp_batch_size         | Int?     | largest batch size for conversion of CHP files to VCF [1024] (only in **cel** and **chp** mode)  |
 | max_win_size_cm        | Float?   | maximum windows size in cM for phasing [50.0]                                                    |
@@ -178,7 +177,8 @@ The following are the primary options that you can set in the main input json fi
 | ref_fasta              | String?  | reference sequence [GCA_000001405.15_GRCh38_no_alt_analysis_set.fna/human_g1k_v37.fasta]         |
 | min_chr_len            | Int?     | mimum length of chromosomes to use [2000000]                                                     |
 | mhc_reg                | String?  | interval region for MHC [chr6:27518932-33480487/6:27486711-33448264]                             |
-| kir_reg                | String?  | chromosome for KIR [chr19:54071493-54992731/19:54574747-55504099]                                |
+| kir_reg                | String?  | interval region for KIR [chr19:54071493-54992731/19:54574747-55504099]                           |
+| nonpar_reg             | String?  | interval region for nonPAR [chrX:2781479-155700628/X:2699520-154930289]                          |
 | dup_file               | String?  | file with location of segmental duplications [segdups.bed.gz]                                    |
 | genetic_map_file       | String?  | genetic map [genetic_map_hg38_withX.txt.gz/genetic_map_hg19_withX.txt.gz]                        |
 | cnp_file               | String?  | file with location of copy number polymorphism [cnps.bed]                                        |
@@ -200,14 +200,12 @@ The following are the primary options that you can set in the main input json fi
 | basic_bash_docker      | String?  | docker to run basic bash scripts [debian:stable-slim]                                            |
 | pandas_docker          | String?  | docker to run task ref_scatter [amancevice/pandas:slim]                                          |
 | docker_repository      | String?  | location of docker images [us.gcr.io/mccarroll-mocha]                                            |
-| bcftools_docker        | String?  | docker to run tasks requiring BCFtools [bcftools:1.17-yyyymmdd]                                  |
-| iaap_cli_docker        | String?  | docker to run task idat2gtc [iaap_cli:1.17-yyyymmdd]                                             |
-| autoconvert_docker     | String?  | docker to run task idat2gtc [autoconvert:1.17-yyyymmdd]                                          |
-| apt_docker             | String?  | docker to run task cel2chp [apt:1.17-yyyymmdd]                                                   |
-| shapeit5_docker        | String?  | docker to run task vcf_phase [shapeit5:1.17-yyyymmdd]                                            |
-| r_mocha_docker         | String?  | docker to run tasks mocha_{plot,summary} [r_mocha:1.17-yyyymmdd]                                 |
+| bcftools_docker        | String?  | docker to run tasks requiring BCFtools [bcftools:1.20-yyyymmdd]                                  |
+| apt_docker             | String?  | docker to run task cel2chp [apt:1.20-yyyymmdd]                                                   |
+| shapeit5_docker        | String?  | docker to run task vcf_shapeit5 [shapeit5:1.20-yyyymmdd]                                         |
+| r_mocha_docker         | String?  | docker to run tasks mocha_{plot,summary} [r_mocha:1.20-yyyymmdd]                                 |
 
-The **ref_path** variable should contain the path to the genome reference resources. These are available for download [here](http://software.broadinstitute.org/software/mocha) for either the GRCh37 or GRCh38 human genome reference
+The **ref_path** variable should contain the path to the genome reference resources. These are available for download [here](http://software.broadinstitute.org/software/mochawdl) for either the GRCh37 or GRCh38 human genome reference
 
 However, if you do not provide the **ref_path** variable, variables **ref_fasta**, **dup_file**, **genetic_map_file**, **cnp_file**, **cyto_file**, and **panel_pfx** will need to be provided with their full path. Also notice that the reference genome file should come with the fasta index file and, if you request the manifest files to be realigned, you will need to make sure it also comes with the five corresponding bwa index files. The fasta index file needs to be such that the first 23 entries correspond to the 22 human autosomes and chromosome X, in no specific order
 
@@ -222,15 +220,15 @@ There are options specific to single tasks in the pipeline that can be used and 
 
 | key                  | type          | task                   | description                                                             |
 |----------------------|---------------|------------------------|-------------------------------------------------------------------------|
-| autoconvert          | Boolean       | idat2gtc               | if true uses AutoConvert rather than IAAP CLI [false]                   |
 | table_output         | Boolean       | cel2chp                | output matrices of tab delimited genotype calls and confidences [false] |
-| do_not_use_reference | Boolean       | vcf_phase              | whether to phase without using a reference panel [false]                |
+| do_not_use_reference | Boolean       | vcf_shapeit5           | whether to phase without using a reference panel [false]                |
+| use_shapeit5_ligate  | Boolean       | vcf_ligate             | whether to use SHAPEIT5 ligate in place of BCFtools/concat --ligate     |
 | delim                | String        | {idat,gtc,chp}_scatter | string delimiter used to define IDAT/GTC/CHP sub batches [\"~\"]        |
 | chip_type            | Array[String] | cel2chp                | list of chip types to check library and CEL files against               |
 | tags                 | Array[String] | {gtc,chp,txt}2vcf      | list of FORMAT tags to output in the VCF [\"GT,BAF,LRR\"]               |
 | gc_window_size       | Int           | {gtc,chp,txt}2vcf      | window size in bp used to compute the GC content [200]                  |
 
-When using older Illumina arrays IAAP CLI might not work and furthermore the BPM sanity check for consistency between BPM files and GTC files might also fail. In these cases, it is advised to turn the two flags **autoconvert** and **do_not_use_reference** to true. Similarly, when using older Affymetrix arrays, the chip type information in the CEL files might not reflect the chip type information in the XML file. You can include in the **chip_type** array the chip type labels included in the CEL files
+When using older manifest files BCFtools/idat2gtc might not work and furthermore the BPM sanity check for consistency between BPM files and GTC files might also fail. In these cases, it is advised to turn the flag **do_not_use_reference** to true. Similarly, when using older Affymetrix arrays, the chip type information in the CEL files might not reflect the chip type information in the XML file. You can include in the **chip_type** array the chip type labels included in the CEL files
 
 Outputs
 -------
@@ -271,9 +269,9 @@ The following example consists of [40 HapMap samples](http://doi.org/doi:10.1812
 
 Download manifest data:
 ```
-wget ftp://webdata:webdata@ussd-ftp.illumina.com/downloads/ProductFiles/HumanCNV370/HumanCNV370-Duo/humancnv370v1_c.bpm
-wget ftp://webdata2:webdata2@ussd-ftp.illumina.com/downloads/ProductFiles/HumanCNV370/HumanCNV370-Duo/HumanCNV370v1_C.egt
-wget https://ftp.ncbi.nlm.nih.gov/geo/platforms/GPL6nnn/GPL6986/suppl/GPL6986_HumanCNV370v1_C.csv.gz
+wget ftp://webdata:webdata@ftp.illumina.com/downloads/ProductFiles/HumanCNV370/HumanCNV370-Duo/humancnv370v1_c.bpm
+wget ftp://webdata2:webdata2@ftp.illumina.com/downloads/ProductFiles/HumanCNV370/HumanCNV370-Duo/HumanCNV370v1_C.egt
+wget http://ftp.ncbi.nlm.nih.gov/geo/platforms/GPL6nnn/GPL6986/suppl/GPL6986_HumanCNV370v1_C.csv.gz
 gunzip GPL6986_HumanCNV370v1_C.csv.gz
 /bin/mv GPL6986_HumanCNV370v1_C.csv HumanCNV370v1_C.csv
 ```
@@ -604,9 +602,9 @@ The following are the primary options that you can set in the main input json fi
 | basic_bash_docker   | String?        | docker to run basic bash scripts [debian:stable-slim]                                                  |
 | pandas_docker       | String?        | docker to run task ref_scatter [amancevice/pandas:slim]                                                |
 | docker_repository   | String?        | location of docker images [us.gcr.io/mccarroll-mocha]                                                  |
-| bcftools_docker     | String?        | docker to run tasks requiring BCFtools [bcftools:1.17-yyyymmdd]                                        |
-| impute5_docker      | String?        | docker to run tasks requiring IMPUTE5 [impute5:1.17-yyyymmdd]                                          |
-| beagle5_docker      | String?        | docker to run tasks requiring Beagle5 [beagle5:1.17-yyyymmdd]                                          |
+| bcftools_docker     | String?        | docker to run tasks requiring BCFtools [bcftools:1.20-yyyymmdd]                                        |
+| impute5_docker      | String?        | docker to run tasks requiring IMPUTE5 [impute5:1.20-yyyymmdd]                                          |
+| beagle5_docker      | String?        | docker to run tasks requiring Beagle5 [beagle5:1.20-yyyymmdd]                                          |
 
 Make sure all the `pgt_vcf_files` from the MoChA pipeline are first available in the `gs://{google-bucket}/vcfs` directory, together with the `vcf_files` including the MoChA calls. We strongly advise to use **max_win_size_cm** smaller than **30.0** as imputation of large chromosome windows can be prohibitevely memory intensive due to the high density of variants in the reference panels
 
@@ -697,8 +695,8 @@ The following are the primary options that you can set in the main input json fi
 | plot                | Boolean? | whether to generate a summary plot [true]                                                              |
 | basic_bash_docker   | String?  | docker to run basic bash scripts [debian:stable-slim]                                                  |
 | docker_repository   | String?  | location of docker images [us.gcr.io/mccarroll-mocha]                                                  |
-| bcftools_docker     | String?  | docker to run tasks requiring BCFtools [bcftools:1.17-yyyymmdd]                                        |
-| r_mocha_docker      | String?  | docker to run task shift_plot [r_mocha:1.17-yyyymmdd]                                                  |
+| bcftools_docker     | String?  | docker to run tasks requiring BCFtools [bcftools:1.20-yyyymmdd]                                        |
+| r_mocha_docker      | String?  | docker to run task shift_plot [r_mocha:1.20-yyyymmdd]                                                  |
 
 If you wanted to study allelic shift for a range of chromosomal alterations types, including mosaic loss of chromosomes X (mLOX), you could define samples to be removed from analysis and a table with phenotypes associated to each chromosomal alteration type as explained [here](https://github.com/freeseek/mocha/#mosaic-phenotypes)
 
@@ -814,18 +812,19 @@ The following are the primary options that you can set in the main input json fi
 | basic_bash_docker        | String?  | docker to run basic bash scripts [debian:stable-slim]                                                   |
 | pandas_docker            | String?  | docker to run task ref_scatter [amancevice/pandas:slim]                                                 |
 | docker_repository        | String?  | location of docker images [us.gcr.io/mccarroll-mocha]                                                   |
-| bcftools_docker          | String?  | docker to run tasks requiring BCFtools [bcftools:1.17-yyyymmdd]                                         |
-| regenie_docker           | String?  | docker to run tasks requiring regenie and PLINK [regenie:1.17-yyyymmdd]                                 |
-| r_mocha_docker           | String?  | docker to run task assoc_plot [r_mocha:1.17-yyyymmdd]                                                   |
+| bcftools_docker          | String?  | docker to run tasks requiring BCFtools [bcftools:1.20-yyyymmdd]                                         |
+| regenie_docker           | String?  | docker to run tasks requiring regenie and PLINK [regenie:1.20-yyyymmdd]                                 |
+| r_mocha_docker           | String?  | docker to run task assoc_plot [r_mocha:1.20-yyyymmdd]                                                   |
 
 You can define samples to be removed from analysis and a table with phenotypes associated to each chromosomal alteration type as explained [here](https://github.com/freeseek/mocha/#mosaic-phenotypes)
 
 We advise including age, and age², and up to 20 principal components in your covariates file. The covariate file should not include sex as a covariate, as this will be automatically added when **sex_specific** is not defined. If you want to run a sex specific analysis (e.g. if you are testing mLOY or mLOX), the **sex_specific** variable must be equal to either **male** or **female**
 
-Define options to run the regenie step 1 component of the pipeline:
+Define options to run the regenie step 1 and 2 components of the pipeline:
 ```json
 {
   "assoc.sample_set_id": "hapmap370k",
+  "assoc.max_win_size_cm_step2": 10.0,
   "assoc.pheno_tsv_file": "gs://{google-bucket}/tsvs/hapmap370k.pheno.tsv",
   "assoc.binary": true,
   "assoc.step1": true,
@@ -847,7 +846,7 @@ Define options to run the regenie step 1 component of the pipeline:
 
 Notice that if you want you can run step 1 and step 2 of the association pipeline as two separate steps. It is also okay for `mocha_tsv_file` and `impute_tsv_file` to be the same file rather than separate files. If separate files, the two tables should have the same list of batch IDs. The output `mocha_tsv_file` from the MoChA pipeline and the output `impute_tsv_file` from the imputation pipeline can be used here
 
-When **step2** is **true**, the pipeline will output one tabix indexed summary statistics file for each phenotype analyzed that can be loaded into LocusZoom as is and it will output a single [GWAS-VCF](https://github.com/MRCIEU/gwas-vcf-specification) for all phenotypes. If `gff3_file` is provided as input, coding variants in the VCF will be annotated
+When **step2** is **true**, the pipeline will output one tabix indexed summary statistics file for each phenotype analyzed that can be loaded into LocusZoom as is and it will output a single [GWAS-VCF](https://github.com/MRCIEU/gwas-vcf-specification) for all phenotypes. If `gff3_file` is provided as input, coding variants in the VCF will be annotated. To make this step more parallelized, you can choose a smaller `max_win_size_cm_step2`
 
 Similarly, if `rsid_vcf_file` and `rsid_vcf_idx` are provided as input, variants will be annotated with dbSNP rsIDs
 
@@ -882,8 +881,8 @@ The following are the primary options that you can set in the main input json fi
 | include_str         | String?        | inclusion criterias for variants (e.g. [AF>0.01 && AF<0.99]) not to be used with exclude_str           |
 | basic_bash_docker   | String?        | docker to run basic bash scripts [debian:stable-slim]                                                  |
 | docker_repository   | String?        | location of docker images [us.gcr.io/mccarroll-mocha]                                                  |
-| bcftools_docker     | String?        | docker to run tasks requiring BCFtools [bcftools:1.17-yyyymmdd]                                        |
-| r_mocha_docker      | String?        | docker to run task adj_scores [r_mocha:1.17-yyyymmdd]                                                  |
+| bcftools_docker     | String?        | docker to run tasks requiring BCFtools [bcftools:1.20-yyyymmdd]                                        |
+| r_mocha_docker      | String?        | docker to run task adj_scores [r_mocha:1.20-yyyymmdd]                                                  |
 
 Download polygenic scores summary statistics for blood cell counts and liftOver to GRCh38 (requires munge BCFtools plugin from [here](https://github.com/freeseek/score)):
 ```
@@ -893,8 +892,7 @@ for i in {163..191}; do
   bcftools +munge --no-version -Ou -C columns.tsv -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -s PGS000$i | \
   bcftools sort -Ou | bcftools norm --no-version -Ob -o PGS000$i.hg38.bcf -c w -d none -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna
 done
-bcftools merge --no-version --merge none --no-index -Ob PGS000{163..191}.hg38.bcf | \
-tee PGS.hg38.bcf | bcftools index --force --output PGS.hg38.bcf.csi
+bcftools merge --no-version --merge none --no-index --output PGS.hg38.bcf --output-type b --write-index PGS000{163..191}.hg38.bcf
 /bin/rm PGS000{163..191}.hg38.bcf
 gsutil -m cp PGS.hg38.bcf{,.csi} gs://{google-bucket}/scores/
 ```
@@ -949,14 +947,14 @@ The following softwares are used by the various steps of the pipelines:
 
 | software                                                                                                                                                                                           | description                                    | license     |
 |----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------|-------------|
-| [Illumina Array Analysis Platform](https://support.illumina.com/array/array_software/illumina-array-analysis-platform/downloads.html)                                                              | runs the GenCall algorithm to call genotypes   | proprietary |
-| [Illumina AutoConvert](https://support.illumina.com/array/array_software/beeline/downloads.html)                                                                                                   | runs the GenCall algorithm to call genotypes   | proprietary |
-| [Affymetrix Power Tools](https://www.thermofisher.com/us/en/home/life-science/microarray-analysis/microarray-analysis-partners-programs/affymetrix-developers-network/affymetrix-power-tools.html) | runs the Axiom algorithm to call genotypes     | GPLv2       |
+| [BCFtools/gtc2vcf](https://github.com/freeseek/gtc2vcf)                                                                                                                                            | runs the GenCall algorithm to call genotypes   | MIT         |
+| [Affymetrix Power Tools](https://www.thermofisher.com/us/en/home/life-science/microarray-analysis/microarray-analysis-partners-programs/affymetrix-developers-network/affymetrix-power-tools.html) | runs the Axiom algorithm to call genotypes     | proprietary |
 | [BWA](https://github.com/lh3/bwa)                                                                                                                                                                  | maps DNA sequences against a reference genome  | GPLv3 / MIT |
 | [HTSlib](https://github.com/samtools/htslib)                                                                                                                                                       | a C library for accessing SAMs, CRAMs and VCFs | MIT / BSD   |
 | [Samtools](https://github.com/samtools/samtools)                                                                                                                                                   | manipulates SAMs and BAMs                      | MIT         |
 | [BCFtools](https://github.com/samtools/bcftools)                                                                                                                                                   | manipulates VCFs and BCFs                      | MIT         |
-| [gtc2vcf](https://github.com/freeseek/gtc2vcf)                                                                                                                                                     | converts DNA microarray data to VCF            | MIT         |
+| [BCFtools/gtc2vcf](https://github.com/freeseek/gtc2vcf)                                                                                                                                            | converts Illumina microarray data to VCF       | MIT         |
+| [BCFtools/affy2vcf](https://github.com/freeseek/gtc2vcf)                                                                                                                                           | converts Affymetrix microarray data to VCF     | MIT         |
 | [MoChA](https://github.com/freeseek/mocha)                                                                                                                                                         | calls mosaic chromosomal alterations           | MIT         |
 | [score](https://github.com/freeseek/score)                                                                                                                                                         | tools to work with GWAS-VCF summary statistics | MIT         |
 | [SHAPEIT5](https://github.com/odelaneau/shapeit5)                                                                                                                                                  | estimates haplotype phase from genotypes       | MIT         |
@@ -980,9 +978,6 @@ For users and developers that want to understand the logic and ideas behind the 
 * To avoid return error 1 when grep returns no matches, we use the `|| if [[ $? -eq 1 ]]; then true; else exit $?; fi` trick
 * To avoid return error 2 when gunzip is used on a file localized as a hard link, we use `gunzip --force`
 * Due to a numpy [BUG in interp](https://github.com/numpy/numpy/issues/10448), the option `period = np.inf` needs to be added when interpolating chromosome coordinates
-* Conversion from IDAT to GTC for some arrays might fail to infer gender when using IAAP CLI. For this reason, we use by default the IAAP CLI flag **\--gender-estimate-call-rate-threshold -0.1** (similarly to how it is done by the Broad Genomics platform in [IlluminaGenotypingArrayTasks.wdl](https://github.com/broadinstitute/warp/blob/IlluminaGenotypingArray_v1.11.0/tasks/broad/IlluminaGenotypingArrayTasks.wdl))
-* Conversion from IDAT to GTC using IAAP CLI is 2-3x faster when run on multiple IDATs at once than when run individually on each IDAT (the latter being how the Broad Genomics platform runs it)
-* Conversion from IDAT to GTC for Omni5 arrays requires more than 8GB of RAM
 * Conversion of many GTC or CHP files to VCF can take a long time and be difficult to run on preemptible cloud computing, so making it hierarchical, while requiring more CPU cycles, can actually be cheaper. By default, up to 1,024 GTC or CHP files are converted at once
 * When converting from GTC to VCF and from CHP to VCF, heavy random access to the reference genome is needed, so it is important that enough memory to cache the reference is provided or else the task can run excruciatingly slowly
 * Genotyping using the Affymetrix Power Tools is best run on many samples at once. Affymetrix recommends, in their [data analysis guide](https://assets.thermofisher.com/TFS-Assets/LSG/manuals/axiom_genotyping_solution_analysis_guide.pdf), to batch as large a batch size as computationally feasible, or up to 4800 samples. However, this can take up to 16 hours to execute, it is not parallelizable, and the genotyping software from Affymetrix is not multi-threaded. For this reason task **cel2chp** is set to run on non-preemptible computing by default
@@ -1011,89 +1006,18 @@ RUN apt-get -qqy update --fix-missing && \
                  tabix \
                  samtools \
                  bcftools && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.17-20230919_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.17-20230919_amd64.deb && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/mocha/bio-mocha_1.17-20230919_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./bio-mocha_1.17-20230919_amd64.deb && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.17-20230919_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./score_1.17-20230919_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.20-20240505_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.20-20240505_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/mocha/bio-mocha_1.20-20240505_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./bio-mocha_1.20-20240505_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.20-20240505_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./score_1.20-20240505_amd64.deb && \
     apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
                  wget && \
     apt-get -qqy clean && \
-    rm -rf gtc2vcf_1.17-20230919_amd64.deb \
-           bio-mocha_1.17-20230919_amd64.deb \
-           score_1.17-20230919_amd64.deb \
-           /var/lib/apt/lists/*
-```
-
-Dockerfile for Illumina AutoConvert Software:
-```
-FROM debian:testing-slim
-ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get -qqy update --fix-missing && \
-    apt-get -qqy install --no-install-recommends \
-                 wget \
-                 bcftools \
-                 unzip \
-                 msitools \
-                 cabextract \
-                 gcc \
-                 libc6-dev \
-                 libmono-system-windows-forms4.0-cil && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.17-20230919_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.17-20230919_amd64.deb && \
-#   wget https://support.illumina.com/content/dam/illumina-support/documents/downloads/software/beeline/autoconvert-software-v2-0-1-installer.zip && \
-    wget --no-check-certificate https://www.dropbox.com/s/tm02cu6t0ib1us7/autoconvert-software-v2-0-1-installer.zip && \
-    unzip autoconvert-software-v2-0-1-installer.zip && \
-    msiextract AutoConvertInstaller.msi && \
-    wget ftp://webdata2:webdata2@ussd-ftp.illumina.com/downloads/software/genomestudio/genomestudio-software-v2-0-4-5-installer.zip && \
-    unzip -j genomestudio-software-v2-0-4-5-installer.zip && \
-    cabextract GenomeStudioInstaller.exe && \
-    msiextract a0 && \
-    mv Illumina/GenomeStudio\ 2.0/Heatmap.dll Illumina/AutoConvert\ 2.0 && \
-    wget --no-check-certificate https://raw.githubusercontent.com/freeseek/gtc2vcf/master/nearest_neighbor.c && \
-    gcc -fPIC -shared -O2 -o Illumina/AutoConvert\ 2.0/libMathRoutines.dll.so nearest_neighbor.c && \
-    mv Illumina/AutoConvert\ 2.0 /opt && \
-    apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
-                 wget \
-                 unzip \
-                 msitools \
-                 cabextract \
-                 gcc \
-                 libc6-dev && \
-    apt-get -qqy clean && \
-    rm -rf gtc2vcf_1.17-20230919_amd64.deb \
-           autoconvert-software-v2-0-1-installer.zip \
-           AutoConvertInstaller.msi \
-           genomestudio-software-v2-0-4-5-installer.zip \
-           GenomeStudioInstaller.exe \
-           0 u0 u1 u2 u3 u4 u5 a0 \
-           nearest_neighbor.c \
-           Illumina \
-           /var/lib/apt/lists/*
-```
-
-Dockerfile for Illumina Array Analysis Platform Genotyping Command Line Interface:
-```
-FROM debian:testing-slim
-ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get -qqy update --fix-missing && \
-    apt-get -qqy install --no-install-recommends \
-                 wget \
-                 bcftools \
-                 icu-devtools && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.17-20230919_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.17-20230919_amd64.deb && \
-    wget ftp://webdata2:webdata2@ussd-ftp.illumina.com/downloads/software/iaap/iaap-cli-linux-x64-1.1.0.tar.gz && \
-    mkdir /opt/iaap-cli && \
-    tar xzvf iaap-cli-linux-x64-1.1.0.tar.gz -C /opt iaap-cli-linux-x64-1.1.0/iaap-cli --strip-components=1 && \
-    chmod a+x /opt/iaap-cli/iaap-cli && \
-    ln -s /opt/iaap-cli/iaap-cli /usr/local/bin/iaap-cli && \
-    apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
-                 wget && \
-    apt-get -qqy clean && \
-    rm -rf gtc2vcf_1.17-20230919_amd64.deb \
-           iaap-cli-linux-x64-1.1.0.tar.gz \
+    rm -rf gtc2vcf_1.20-20240505_amd64.deb \
+           bio-mocha_1.20-20240505_amd64.deb \
+           score_1.20-20240505_amd64.deb \
            /var/lib/apt/lists/*
 ```
 
@@ -1106,15 +1030,15 @@ RUN apt-get -qqy update --fix-missing && \
                  wget \
                  bcftools \
                  unzip && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.17-20230919_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.17-20230919_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.20-20240505_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.20-20240505_amd64.deb && \
     wget --no-check-certificate https://www.thermofisher.com/content/dam/LifeTech/Documents/ZIP/apt_2.11.6_linux_64_x86_binaries.zip && \
     unzip -ojd /usr/local/bin apt_2.11.6_linux_64_x86_binaries.zip apt_2.11.6_linux_64_x86_binaries/bin/apt-probeset-genotype && \
     chmod a+x /usr/local/bin/apt-probeset-genotype && \
     apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
                  wget && \
     apt-get -qqy clean && \
-    rm -rf gtc2vcf_1.17-20230919_amd64.deb \
+    rm -rf gtc2vcf_1.20-20240505_amd64.deb \
            apt_2.11.6_linux_64_x86_binaries.zip \
            /var/lib/apt/lists/*
 ```
@@ -1132,15 +1056,15 @@ RUN apt-get -qqy update --fix-missing && \
                  r-cran-ggplot2 \
                  r-cran-data.table \
                  r-cran-reshape2 && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/mocha/bio-mocha_1.17-20230919_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./bio-mocha_1.17-20230919_amd64.deb && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.17-20230919_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./score_1.17-20230919_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/mocha/bio-mocha_1.20-20240505_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./bio-mocha_1.20-20240505_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.20-20240505_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./score_1.20-20240505_amd64.deb && \
     apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
                  wget && \
     apt-get -qqy clean && \
-    rm -rf bio-mocha_1.17-20230919_amd64.deb \
-           score_1.17-20230919_amd64.deb \
+    rm -rf bio-mocha_1.20-20240505_amd64.deb \
+           score_1.20-20240505_amd64.deb \
            /var/lib/apt/lists/*
 ```
 
@@ -1212,18 +1136,18 @@ RUN apt-get -qqy update --fix-missing && \
                  bcftools \
                  plink1.9 \
                  plink2 && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.17-20230919_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./score_1.17-20230919_amd64.deb && \
-    wget --no-check-certificate https://github.com/rgcgithub/regenie/releases/download/v3.2.9/regenie_v3.2.9.gz_x86_64_Linux_mkl.zip && \
-    unzip -d /usr/local/bin regenie_v3.2.9.gz_x86_64_Linux_mkl.zip && \
-    chmod a+x /usr/local/bin/regenie_v3.2.9.gz_x86_64_Linux_mkl && \
-    ln -s regenie_v3.2.9.gz_x86_64_Linux_mkl /usr/local/bin/regenie && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.20-20240505_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./score_1.20-20240505_amd64.deb && \
+    wget --no-check-certificate https://github.com/rgcgithub/regenie/releases/download/v3.4.1/regenie_v3.4.1.gz_x86_64_Linux_mkl.zip && \
+    unzip -d /usr/local/bin regenie_v3.4.1.gz_x86_64_Linux_mkl.zip && \
+    chmod a+x /usr/local/bin/regenie_v3.4.1.gz_x86_64_Linux_mkl && \
+    ln -s regenie_v3.4.1.gz_x86_64_Linux_mkl /usr/local/bin/regenie && \
     apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
                  wget \
                  unzip && \
     apt-get -qqy clean && \
-    rm -rf score_1.17-20230919_amd64.deb \
-           regenie_v3.2.9.gz_x86_64_Linux_mkl.zip \
+    rm -rf score_1.20-20240505_amd64.deb \
+           regenie_v3.4.1.gz_x86_64_Linux_mkl.zip \
            /var/lib/apt/lists/*
 ```
 

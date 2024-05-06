@@ -1,15 +1,15 @@
 version development
 
-## Copyright (c) 2020-2023 Giulio Genovese
+## Copyright (c) 2020-2024 Giulio Genovese
 ##
-## Version 2023-09-19
+## Version 2024-05-05
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs MoChA on a cohort of samples genotyped with either Illumina or Affymetrix DNA microarrays
 ##
 ## Cromwell version support
-## - Successfully tested on v85
+## - Successfully tested on v86
 ##
 ## Distributed under terms of the MIT License
 
@@ -20,6 +20,7 @@ struct Reference {
   File? rules_file
   String? mhc_reg
   String? kir_reg
+  String? nonpar_reg
   File? dup_file
   File genetic_map_file
   File? cnp_file
@@ -39,7 +40,7 @@ workflow mocha {
     Boolean wgs = false
     Boolean gtc_output = false # only for idat mode
     Boolean chp_output = false # only for cel mode
-    Int idat_batch_size = 48
+    Int idat_batch_size = 256
     Int gtc_batch_size = 1024
     Int chp_batch_size = 1024
     Float max_win_size_cm = 50.0
@@ -56,6 +57,7 @@ workflow mocha {
     File? ref_rules_file
     String? mhc_reg
     String? kir_reg
+    String? nonpar_reg
     String? dup_file
     String? genetic_map_file
     String? cnp_file
@@ -79,15 +81,13 @@ workflow mocha {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.17-20230919"
-    String iaap_cli_docker = "iaap_cli:1.17-20230919"
-    String autoconvert_docker = "autoconvert:1.17-20230919"
-    String apt_docker = "apt:1.17-20230919"
-    String shapeit5_docker = "shapeit5:1.17-20230919"
-    String r_mocha_docker = "r_mocha:1.17-20230919"
-    Boolean autoconvert = false
+    String bcftools_docker = "bcftools:1.20-20240505"
+    String apt_docker = "apt:1.20-20240505"
+    String shapeit5_docker = "shapeit5:1.20-20240505"
+    String r_mocha_docker = "r_mocha:1.20-20240505"
     Boolean? table_output
     Boolean do_not_use_reference = false
+    Boolean use_shapeit5_ligate = false
     String delim = "~"
     Array[String]? chip_type
     String tags = "GT,BAF,LRR"
@@ -106,6 +106,7 @@ workflow mocha {
     rules_file: if defined(ref_rules_file) then ref_path_with_sep + select_first([ref_rules_file]) else None,
     mhc_reg: if defined(mhc_reg) then select_first([mhc_reg]) else if ref_name == "GRCh38" then "chr6:27518932-33480487" else if ref_name == "GRCh37" then "6:27486711-33448264" else None,
     kir_reg: if defined(kir_reg) then select_first([kir_reg]) else if ref_name == "GRCh38" then "chr19:54071493-54992731" else if ref_name == "GRCh37" then "19:54574747-55504099" else None,
+    nonpar_reg: if defined(nonpar_reg) then select_first([nonpar_reg]) else if ref_name == "GRCh38" then "chrX:2781479-155700628" else if ref_name == "GRCh37" then "X:2699520-154930289" else None,
     dup_file: if defined(dup_file) then ref_path_with_sep + select_first([dup_file]) else if ref_name == "GRCh38" || ref_name == "GRCh37" then ref_path_with_sep + "segdups.bed.gz" else None,
     genetic_map_file: if defined(genetic_map_file) then ref_path_with_sep + select_first([genetic_map_file]) else if ref_name == "GRCh38" then ref_path_with_sep + "genetic_map_hg38_withX.txt.gz" else if ref_name == "GRCh37" then ref_path_with_sep + "genetic_map_hg19_withX.txt.gz" else None,
     cnp_file: if defined(cnp_file) then ref_path_with_sep + select_first([cnp_file]) else if ref_name == "GRCh38" || ref_name == "GRCh37" then ref_path_with_sep + "cnps.bed" else None,
@@ -187,9 +188,8 @@ workflow mocha {
             egt_file = manifest_path_with_sep + batch_tbl["egt"][(idat.idxs[idx])],
             green_idat_files = prefix(data_paths_with_sep[(idat.idxs[idx])], idat_batch2green_idat_files[(idat.sub_batches[idx])]),
             red_idat_files = prefix(data_paths_with_sep[(idat.idxs[idx])], idat_batch2red_idat_files[(idat.sub_batches[idx])]),
-            autoconvert = autoconvert,
             filebase = sample_set_id + "." + idat.sub_batches[idx],
-            docker = if autoconvert then docker_repository_with_sep + autoconvert_docker else docker_repository_with_sep + iaap_cli_docker,
+            docker = docker_repository_with_sep + bcftools_docker,
         }
       }
       call tsv_concat as green_idat_tsv { input: tsv_files = idat2gtc.green_idat_tsv, filebase = sample_set_id + ".green_idat", docker = basic_bash_docker }
@@ -403,6 +403,11 @@ workflow mocha {
       Int mhc_beg = sub(sub(select_first([ref.mhc_reg]), "-.*$", ""), "^.*:", "")
       Int mhc_end = sub(select_first([ref.mhc_reg]), "^.*-", "")
     }
+    if (defined(ref.nonpar_reg)) {
+      String? nonpar_chr = sub(select_first([ref.nonpar_reg]), ":.*$", "")
+      Int nonpar_beg = sub(sub(select_first([ref.nonpar_reg]), "-.*$", ""), "^.*:", "")
+      Int nonpar_end = sub(select_first([ref.nonpar_reg]), "^.*-", "")
+    }
     scatter (idx in range(length(intervals_tbl[0]))) {
       if (length(interval_slices[idx]) > 1) {
         call vcf_merge {
@@ -437,6 +442,7 @@ workflow mocha {
           genetic_map_file = ref.genetic_map_file,
           n_chrs = length(select_all(chrs)),
           pedigree_file = pedigree_file,
+          sample_tsv_file = if defined(ref.nonpar_reg) && intervals_tbl[0][idx] == select_first([nonpar_chr]) && beg >= select_first([nonpar_beg]) && end <= select_first([nonpar_end]) then select_first([sample_tsv.file, sample_tsv_file]) else None,
           n_panel_smpls = if use_reference then ref.n_panel_smpls else None,
           ref_vcf_file = if use_reference then ref.panel_pfx + intervals_tbl[0][idx] + ref.panel_sfx else None,
           ref_vcf_idx = if use_reference then ref.panel_pfx + intervals_tbl[0][idx] + ref.panel_sfx + ref.panel_idx else None,
@@ -472,9 +478,9 @@ workflow mocha {
       call vcf_ligate {
         input:
           vcf_files = batch_slices[idx],
-          pedigree_file = pedigree_file,
+          pedigree_file = if use_shapeit5_ligate then pedigree_file else None,
           filebase = pfxs[idx] + ".pgt",
-          docker = docker_repository_with_sep + shapeit5_docker
+          docker = docker_repository_with_sep + if use_shapeit5_ligate then shapeit5_docker else bcftools_docker
       }
       call vcf_import {
         input:
@@ -1039,8 +1045,7 @@ task idat2gtc {
     File egt_file
     Array[File]+ green_idat_files
     Array[File]+ red_idat_files
-    Boolean is_gender_autocall = true # from dsde-pipelines/tasks/IlluminaGenotypingArrayTasks.wdl
-    Boolean autoconvert = false
+    Int preset = 4
     String filebase
 
     String docker
@@ -1050,7 +1055,7 @@ task idat2gtc {
     Int preemptible = 1
     Int maxRetries = 0
 
-    Float mult = 7.0 # to estimate the amount of memory required given the size of the manifest files
+    Float mult = 2.0 # to estimate the amount of memory required given the size of the manifest files
   }
 
   Float bpm_size = (if basename(bpm_file) != basename(bpm_file, ".gz") then 4.0 else 1.0) * size(bpm_file, "GiB")
@@ -1076,37 +1081,14 @@ task idat2gtc {
     sed -i 's/^.*\///;s/.gz$//' $red_idat_files
     bcftools +gtc2vcf --idat --gtcs $green_idat_files --output "~{filebase}.green_idat.tsv"
     bcftools +gtc2vcf --idat --gtcs $red_idat_files --output "~{filebase}.red_idat.tsv"
-    ~{if autoconvert then
-      "echo AutoConvert.exe AutoCallLib.dll PollerUtils.dll ClusterAlgInterface.dll PolyploidClustering.dll \\\n" +
-      "  GenotypingBSM.dll Common.dll Genotyping.dll BeadStudioCommon.dll BeadStudioProjectLibrary.dll \\\n" +
-      "  Table.dll IGVInterface.dll BeadStudioPCBSM.dll FrameworkClassLibrary.dll FrameworkInterfaceLibrary.dll \\\n" +
-      "  DotNetMagicLocal.dll Heatmap.dll WGGTLIMS.dll ILCA3.dll Files.dll | tr ' ' '\\n' | xargs -i ln -s  \"/opt/AutoConvert 2.0/{}\"\n" +
-      "sed 's/^\\(   <NumberOfThreads>\\)4\\(<\\/NumberOfThreads>\\r\\)$/\\1" + cpu + "\\2/' \\\n" +
-      "  \"/opt/AutoConvert 2.0/AutoCallConfig.xml\" > AutoCallConfig.xml\n" +
-      "mkdir gtcs\n" +
-      "cat $green_idat_files | tr '\\n' '\\0' | \\\n" +
-      "  xargs -0 -i mono \\\n" +
-      "  AutoConvert.exe \\\n" +
-      "  \"{}\" \\\n" +
-      "  gtcs \\\n" +
-      "  \"" + basename(bpm_file, ".gz") + "\" \\\n" +
-      "  \"" + basename(egt_file, ".gz") + "\" \\\n" +
-      "  1>&2\n" +
-      "rm AutoConvert.exe AutoCallLib.dll PollerUtils.dll ClusterAlgInterface.dll PolyploidClustering.dll \\\n" +
-      "  GenotypingBSM.dll Common.dll Genotyping.dll BeadStudioCommon.dll BeadStudioProjectLibrary.dll \\\n" +
-      "  Table.dll IGVInterface.dll BeadStudioPCBSM.dll FrameworkClassLibrary.dll FrameworkInterfaceLibrary.dll \\\n" +
-      "  DotNetMagicLocal.dll Heatmap.dll WGGTLIMS.dll ILCA3.dll Files.dll AutoCallConfig.xml"
-    else
-      "CLR_ICU_VERSION_OVERRIDE=\"$(uconv -V | sed 's/.* //g')\" iaap-cli \\\n" +
-      "  gencall \\\n" +
-      "  \"" + basename(bpm_file, ".gz") + "\" \\\n" +
-      "  \"" + basename(egt_file, ".gz") + "\" \\\n" +
-      "  gtcs \\\n" +
-      "  --idat-folder . \\\n" +
-      "  --output-gtc \\\n" +
-      (if is_gender_autocall then "  --gender-estimate-call-rate-threshold -0.1 \\\n" else "") +
-      (if cpu > 1 then "  --num-threads " + cpu + " \\\n" else "") +
-      "	 1>&2"}
+    bcftools +idat2gtc \
+      --bpm "~{basename(bpm_file, ".gz")}" \
+      --egt "~{basename(egt_file, ".gz")}" \
+      --grn-idats $green_idat_files \
+      --red-idats $red_idat_files \
+      --output gtcs \
+      --preset ~{preset} \
+      --autocall-date ""
     sed 's/^/gtcs\//;s/_Grn\.idat$/.gtc/' $green_idat_files
     rm "~{basename(bpm_file, ".gz")}"
     rm "~{basename(egt_file, ".gz")}"
@@ -1302,9 +1284,14 @@ task gtc2vcf {
       ~{if defined(sam_file) then "--sam-flank \"" + basename(select_first([sam_file])) + "\"" else ""} | \
       ~{if defined(reheader_file) then "bcftools reheader --samples \"" + basename(select_first([reheader_file])) + "\" |" else ""} \
       bcftools sort --output-type u --temp-dir ./bcftools. | \
-    bcftools norm --no-version --output-type b --check-ref x --fasta-ref "~{basename(ref_fasta)}"~{if cpu > 1 then " --threads " + (cpu - 1) else ""} | \
-    tee "~{filebase}.bcf" | \
-    bcftools index --force --output "~{filebase}.bcf.csi"
+    bcftools norm \
+      --no-version \
+      --output "~{filebase}.bcf" \
+      --output-type b \
+      --check-ref x \
+      --fasta-ref "~{basename(ref_fasta)}" \
+      ~{if cpu > 1 then " --threads " + (cpu - 1) else ""} \
+      --write-index
     bcftools query --list-samples "~{filebase}.bcf" | tee "~{filebase}.sample_id.lines" | wc -l
     rm "~{basename(bpm_file, ".gz")}"
     rm "~{basename(egt_file, ".gz")}"
@@ -1387,9 +1374,14 @@ task chp2vcf {
       ~{if defined(sam_file) then "--sam-flank \"" + basename(select_first([sam_file])) + "\"" else ""} | \
       ~{if defined(reheader_file) then "bcftools reheader --samples \"" + basename(select_first([reheader_file])) + "\" |" else ""} \
     bcftools sort --output-type u --temp-dir ./bcftools. | \
-    bcftools norm --no-version --output-type b --check-ref x --fasta-ref "~{basename(ref_fasta)}"~{if cpu > 1 then " --threads " + (cpu - 1) else ""} | \
-    tee "~{filebase}.bcf" | \
-    bcftools index --force --output "~{filebase}.bcf.csi"
+    bcftools norm \
+      --no-version \
+      --output "~{filebase}.bcf" \
+      --output-type b \
+      --check-ref x \
+      --fasta-ref "~{basename(ref_fasta)}" \
+      ~{if cpu > 1 then " --threads " + (cpu - 1) else ""} \
+      --write-index
     bcftools query --list-samples "~{filebase}.bcf" | tee "~{filebase}.sample_id.lines" | wc -l
     echo "~{sep("\n", select_all([csv_file, ref_fasta, ref_fasta_fai, snp_file, sam_file, reheader_file]))}" | \
       sed 's/^.*\///' | cat - $chp_files | tr '\n' '\0' | xargs -0 rm
@@ -1477,11 +1469,16 @@ task txt2vcf {
       --snp "~{basename(snp_file)}" \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
       ~{if defined(sam_file) then "--sam-flank \"" + basename(select_first([sam_file])) + "\"" else ""} | \
-      ~{if defined(reheader_file) then "bcftools reheader --samples \"" + basename(select_first([reheader_file])) + "\" |" else ""} \
-      bcftools sort --output-type u --temp-dir ./bcftools. | \
-      bcftools norm --no-version --output-type b --check-ref x --fasta-ref "~{basename(ref_fasta)}"~{if cpu > 1 then " --threads " + (cpu - 1) else ""} | \
-    tee "~{filebase}.bcf" | \
-    bcftools index --force --output "~{filebase}.bcf.csi"
+    ~{if defined(reheader_file) then "bcftools reheader --samples \"" + basename(select_first([reheader_file])) + "\" |" else ""} \
+    bcftools sort --output-type u --temp-dir ./bcftools. | \
+    bcftools norm \
+      --no-version \
+      --output "~{filebase}.bcf" \
+      --output-type b \
+      --check-ref x \
+      --fasta-ref "~{basename(ref_fasta)}" \
+      ~{if cpu > 1 then " --threads " + (cpu - 1) else ""} \
+      --write-index
     bcftools query --list-samples "~{filebase}.bcf" | tee "~{filebase}.sample_id.lines" | wc -l
     echo "~{sep("\n", select_all([csv_file, ref_fasta, ref_fasta_fai, calls_file, confidences_file, summary_file, snp_file, sam_file, reheader_file]))}" | \
       sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm
@@ -1665,14 +1662,14 @@ task vcf_merge {
       "sed -i 's/^.*\\///' $vcf_files\n" +
       "bcftools merge \\\n" +
       "  --no-version \\\n" +
+      "  --output \"" + filebase + ".bcf\" \\\n" +
       "  --output-type b \\\n" +
       (if wgs then "--missing-to-ref \\\n" else "") +
       "  --file-list $vcf_files \\\n" +
       "  --merge none \\\n" +
       "  --no-index \\\n" +
-      (if cpu > 1 then "  --threads " + (cpu - 1) else "") + " | \\\n" +
-      "tee \"" + filebase + ".bcf\" | \\\n" +
-      "bcftools index --force --output \"" + filebase + ".bcf.csi\""
+      (if cpu > 1 then "  --threads " + (cpu - 1) else "") + " \\\n" +
+      "--write-index"
     else "mv \"" + vcf_files[0] + "\" \"" + filebase + ".bcf\"\n" +
       "bcftools index --force \"" + filebase + ".bcf\""}
     bcftools query --list-samples "~{filebase}.bcf" | wc -l
@@ -1739,17 +1736,13 @@ task vcf_qc {
     bcftools view --no-version --output-type u~{if cpu > 1 then " --threads " + (cpu - 1) else ""} --samples-file ^samples_xcl.lines --force-samples ~{if defined(dup_file) then "" else "\"" + basename(vcf_file) + "\""} | \
     bcftools +fill-tags --no-version --output-type u --targets ^Y,MT,chrY,chrM~{if cpu > 1 then " --threads " + (cpu - 1) else ""} -- --tags ExcHet,F_MISSING | \
     bcftools view --no-version --output-type u --drop-genotypes | \
-    bcftools annotate --no-version --output-type b \
+    bcftools annotate --no-version --output "~{filebase}.xcl.bcf" --output-type b \
       --include 'FILTER!="." && FILTER!="PASS" ~{if defined(dup_file) then "|| INFO/JK<" + dup_divergence_thr else ""}|| INFO/ExcHet<~{genotype_exc_het_thr} || INFO/F_MISSING>1-~{variant_call_rate_thr}' \
-      --remove ~{if defined(dup_file) then "^INFO/JK," else ""}^INFO/ExcHet,^INFO/F_MISSING~{if cpu > 1 then " --threads " + (cpu - 1) else ""} | \
-    tee "~{filebase}.xcl.bcf" | \
-    bcftools index --force --output "~{filebase}.xcl.bcf.csi"
+      --remove ~{if defined(dup_file) then "^INFO/JK," else ""}^INFO/ExcHet,^INFO/F_MISSING~{if cpu > 1 then " --threads " + (cpu - 1) else ""} --write-index
     ~{if defined(extra_xcl_vcf_file) then "mv \"" + filebase + ".xcl.bcf\" \"" + filebase + ".tmp.bcf\"\n" +
       "mv \"" + filebase + ".xcl.bcf.csi\" \"" + filebase + ".tmp.bcf.csi\"\n" +
       "bcftools index --force \"" + basename(select_first([extra_xcl_vcf_file])) + "\"\n" +
-      "bcftools merge --no-version --output-type b --merge none \"" + filebase + ".tmp.bcf\" \"" + basename(select_first([extra_xcl_vcf_file])) + "\" | \\\n" +
-      "tee \"" + filebase + ".xcl.bcf\" | \\\n" +
-      "bcftools index --force --output \"" + filebase + ".xcl.bcf.csi\"\n" +
+      "bcftools merge --no-version --output \"" + filebase + ".xcl.bcf\" --output-type b --merge none \"" + filebase + ".tmp.bcf\" \"" + basename(select_first([extra_xcl_vcf_file])) + "\" --write-index\n" +
       "rm \"" + filebase + ".tmp.bcf\" \"" + filebase + ".tmp.bcf.csi\"" else ""}
     bcftools isec \
       --no-version \
@@ -1759,9 +1752,7 @@ task vcf_qc {
       --write 1 \
       "~{basename(vcf_file)}" \
       "~{filebase}.xcl.bcf" | \
-    bcftools view --no-version --output-type b --min-ac 0 --exclude-uncalled | \
-    tee "~{filebase}.qc.bcf" | \
-    bcftools index --force --output "~{filebase}.qc.bcf.csi"
+    bcftools view --no-version --output "~{filebase}.qc.bcf" --output-type b --min-ac 0 --exclude-uncalled --write-index
     bcftools index --nrecords "~{filebase}.qc.bcf"
     ~{if defined(vcf_idx) then "" else "rm \"" + basename(vcf_file) + ".csi\""}
     echo "~{sep("\n", select_all([vcf_file, vcf_idx, dup_file, sample_tsv_file, duplicate_samples_file, extra_xcl_vcf_file]))}" | \
@@ -1798,6 +1789,7 @@ task vcf_shapeit5 {
     File genetic_map_file
     Int n_chrs
     File? pedigree_file
+    File? sample_tsv_file
     Int? n_panel_smpls
     File? ref_vcf_file
     File? ref_vcf_idx
@@ -1831,17 +1823,23 @@ task vcf_shapeit5 {
 
   command <<<
     set -euo pipefail
-    echo "~{sep("\n", select_all([unphased_vcf_file, unphased_vcf_idx, genetic_map_file, pedigree_file, ref_vcf_file, ref_vcf_idx]))}" | \
+    echo "~{sep("\n", select_all([unphased_vcf_file, unphased_vcf_idx, genetic_map_file, pedigree_file, sample_tsv_file, ref_vcf_file, ref_vcf_idx]))}" | \
       tr '\n' '\0' | xargs -0 mv -t .
     ~{if defined(ref_fasta_fai) then "mv \"" + select_first([ref_fasta_fai]) + "\" ." else ""}
     chr=~{chr}; zcat "~{basename(genetic_map_file)}" | \
       sed 's/^~{n_chrs}/X/' | awk -v chr=${chr#chr} '$1==chr {print $2,$3,$4}' > genetic_map.txt
+    ~{if defined(sample_tsv_file) then
+    "awk -F\"\t\" 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}\n" +
+    "  NR>1 && $(f[\"computed_gender\"])==\"M\" {print $(f[\"sample_id\"])}' \\\n" +
+    "  > \"" + filebase + ".haploids.lines\" \"" + basename(select_first([sample_tsv_file])) + "\""
+    else ""}
     phase_common \
       ~{if cpu > 1 then "--thread " + cpu else ""} \
       --input "~{basename(unphased_vcf_file)}" \
       ~{if defined(ref_vcf_file) then "--reference \"" + basename(select_first([ref_vcf_file])) + "\"" else ""} \
       --map genetic_map.txt \
       ~{if defined(pedigree_file) then "--pedigree \"" + basename(select_first([pedigree_file])) + "\"" else ""} \
+      ~{if defined(sample_tsv_file) then "--haploids \"" + filebase + ".haploids.lines\"" else ""} \
       --region ~{scaffold_region} \
       ~{if maf > 0 then "--filter-maf " + maf else ""} \
       --output "~{filebase}.~{if maf > 0 then "scaffold" else "pgt"}.bcf" \
@@ -1853,12 +1851,14 @@ task vcf_shapeit5 {
       "  --input \"" + basename(unphased_vcf_file) + "\" \\\n" +
       "  --scaffold \"" + filebase + ".scaffold.bcf\" \\\n" +
       "  --map genetic_map.txt \\\n" +
+      (if defined(pedigree_file) then "  --pedigree \"" + basename(select_first([pedigree_file])) + "\" \\\n" else "") +
+      (if defined(sample_tsv_file) then "--haploids \"" + filebase + ".haploids.lines\" \\\n" else "") +
       "  --input-region " + input_region + " \\\n" +
       "  --scaffold-region " + scaffold_region + " \\\n" +
       "  --output \"" + filebase + ".pgt.bcf\" \\\n" +
       "1>&2\n" +
       "rm \"" + filebase + ".scaffold.bcf\"\n"
-    else ""}rm genetic_map.txt
+    else ""}rm genetic_map.txt~{if defined(sample_tsv_file) then " \"" + filebase + ".haploids.lines\"" else ""}
     ~{if defined(ref_fasta_fai) then
       "(echo -en \"##fileformat=VCFv4.2\\n#CHROM\\tPOS\\tID\\tREF\\tALT\\tQUAL\\tFILTER\\tINFO\\tFORMAT\\t\"\n" +
       "bcftools query -l \"" + filebase + ".pgt.bcf\" | tr '\\n' '\\t' | sed 's/\\t$/\\n/') > tmp.vcf\n" +
@@ -1872,7 +1872,7 @@ task vcf_shapeit5 {
       "rm \"" + filebase + ".tmp.bcf\" fai.vcf tmp.vcf \"" + basename(select_first([ref_fasta_fai])) + "\""
       else ""}
     bcftools index --force "~{filebase}.pgt.bcf"
-    echo "~{sep("\n", select_all([unphased_vcf_file, unphased_vcf_idx, genetic_map_file, pedigree_file, ref_vcf_file, ref_vcf_idx]))}" | \
+    echo "~{sep("\n", select_all([unphased_vcf_file, unphased_vcf_idx, genetic_map_file, pedigree_file, sample_tsv_file, ref_vcf_file, ref_vcf_idx]))}" | \
       sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm
   >>>
 
@@ -1967,12 +1967,12 @@ task vcf_concat {
     cat $vcf_files | tr '\n' '\0' | xargs -0 -n 1 bcftools index --force
     bcftools concat \
       --no-version \
+      --output "~{filebase}.bcf" \
       --output-type b \
       --allow-overlaps \
       --file-list $vcf_files \
-      ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} | \
-    tee "~{filebase}.bcf" | \
-    bcftools index --force --output "~{filebase}.bcf.csi"
+      ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
+      --write-index
     cat $vcf_files | tr '\n' '\0' | xargs -0 rm
     cat $vcf_files | sed 's/$/.csi/' | tr '\n' '\0' | xargs -0 rm
     bcftools query --list-samples "~{filebase}.bcf" | wc -l
@@ -2000,6 +2000,7 @@ task vcf_ligate {
     Array[File]+ vcf_files
     File? pedigree_file
     String filebase
+    Boolean use_shapeit5_ligate = false
 
     String docker
     Int? cpu_override
@@ -2008,12 +2009,12 @@ task vcf_ligate {
     Int preemptible = 1
     Int maxRetries = 0
 
-    Float mult = 24.0
+    Float mult = 12.0
   }
 
   Float vcf_size = size(vcf_files, "GiB")
   Int disk_size = select_first([disk_size_override, ceil(10.0 + 2.0 * vcf_size)])
-  Float memory = select_first([memory_override, 3.5 + mult * vcf_size / length(vcf_files)])
+  Float memory = select_first([memory_override, 3.5 + (if use_shapeit5_ligate then 2.0 * mult else mult) * vcf_size / length(vcf_files)])
   Int cpu = select_first([cpu_override, if memory > 6.5 then 2 * ceil(memory / 13) else 1])
 
   command <<<
@@ -2023,13 +2024,24 @@ task vcf_ligate {
     cat $vcf_files | tr '\n' '\0' | xargs -0 mv -t .
     sed -i 's/^.*\///' $vcf_files
     cat $vcf_files | tr '\n' '\0' | xargs -0 -n 1 bcftools index --force
-    ligate \
-      ~{if cpu > 1 then "  --thread " + cpu else ""} \
-      --input $vcf_files \
-      ~{if defined(pedigree_file) then "--pedigree \"" + basename(select_first([pedigree_file])) + "\"" else ""} \
-      --output "~{filebase}.bcf" \
-      --index \
-      1>&2
+    ~{if use_shapeit5_ligate then
+      "ligate \\\n" +
+      (if cpu > 1 then "  --thread " + cpu + " \\\n" else "") +
+      "  --input $vcf_files \\\n" +
+      (if defined(pedigree_file) then "  --pedigree \"" + basename(select_first([pedigree_file])) + "\" \\\n" else "") +
+      "  --output \"" + filebase + ".bcf\" \\\n" +
+      "  --index \\\n" +
+      "  1>&2"
+    else
+      "bcftools concat \\\n" +
+      "  --no-version \\\n" +
+      "  --output-type b \\\n" +
+      "  --output \"" + filebase + ".bcf\" \\\n" +
+      "  --compact-PS \\\n" +
+      "  --file-list $vcf_files \\\n" +
+      "  --ligate \\\n" +
+      "  --ligate-force \\\n" +
+      "  --write-index"}
     ~{if defined(pedigree_file) then "rm \"" + basename(select_first([pedigree_file])) + "\"" else ""}
     cat $vcf_files | tr '\n' '\0' | xargs -0 rm
     cat $vcf_files | sed 's/$/.csi/' | tr '\n' '\0' | xargs -0 rm
@@ -2082,13 +2094,13 @@ task vcf_import {
     mv "~{unphased_vcf_idx}" .
     bcftools annotate \
       --no-version \
+      --output "~{filebase}.phased.bcf" \
       --output-type b \
       --annotations "~{basename(pgt_vcf_file)}" \
       --columns -FMT/GT \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
-      "~{basename(unphased_vcf_file)}" | \
-    tee "~{filebase}.phased.bcf" | \
-    bcftools index --force --output "~{filebase}.phased.bcf.csi"
+      "~{basename(unphased_vcf_file)}" \
+      --write-index
     bcftools query --list-samples "~{filebase}.phased.bcf" | wc -l
     rm "~{basename(pgt_vcf_file)}"
     rm "~{basename(pgt_vcf_idx)}"
@@ -2197,15 +2209,14 @@ task vcf_mocha {
       ~{if defined(mhc_reg) then "--mhc \"" + mhc_reg + "\"" else ""} \
       ~{if defined(kir_reg) then "--kir \"" + kir_reg + "\"" else ""} \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
-      --output - \
+      --output "~{filebase}.~{ext_string}.bcf" \
       --output-type b \
       --calls "~{filebase}.calls.tsv" \
       --stats "~{filebase}.stats.tsv" \
       --ucsc-bed "~{filebase}.ucsc.bed" \
       "~{input_pvcf_file}" \
-      ~{mocha_extra_args} | \
-    tee "~{filebase}.~{ext_string}.bcf" | \
-    bcftools index --force --output "~{filebase}.~{ext_string}.bcf.csi"
+      ~{mocha_extra_args} \
+      --write-index
     rm "~{input_pvcf_file}"
     rm "~{input_pvcf_idx}"
     echo "~{sep("\n", select_all([rules_file, sample_tsv_file, xcl_vcf_file, xcl_vcf_idx, cnp_file]))}" | \
