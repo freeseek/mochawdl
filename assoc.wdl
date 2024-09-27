@@ -2,14 +2,14 @@ version development
 
 ## Copyright (c) 2021-2024 Giulio Genovese
 ##
-## Version 2024-05-05
+## Version 2024-09-27
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs association analyses with REGENIE and PLINK2
 ##
 ## Cromwell version support
-## - Successfully tested on v86
+## - Successfully tested on v87
 ##
 ## Distributed under terms of the MIT License
 
@@ -23,8 +23,8 @@ struct Reference {
   File? cyto_file
   File genetic_map_file
   String? pca_exclusion_regions
-  File? gff3_file # https://ftp.ensembl.org/pub/current_gff3/homo_sapiens/
-  File? rsid_vcf_file # https://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/
+  File? gff3_file # http://ftp.ensembl.org/pub/current_gff3/homo_sapiens/
+  File? rsid_vcf_file # http://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/
   File? rsid_vcf_idx
 }
 
@@ -93,9 +93,9 @@ workflow assoc {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.20-20240505"
-    String regenie_docker = "regenie:1.20-20240505"
-    String r_mocha_docker = "r_mocha:1.20-20240505"
+    String bcftools_docker = "bcftools:1.20-20240927"
+    String regenie_docker = "regenie:1.20-20240927"
+    String r_mocha_docker = "r_mocha:1.20-20240927"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -164,7 +164,7 @@ workflow assoc {
     Int n_mocha_batches = length(mocha_tsv)-1
     scatter (idx in range(n_mocha_batches)) { Array[String] mocha_tsv_rows = mocha_tsv[(idx+1)] }
     Map[String, Array[String]] mocha_tbl = as_map(zip(mocha_tsv[0], transpose(mocha_tsv_rows)))
-    # check if path is in mocha table (see https://github.com/openwdl/wdl/issues/305)
+    # check if path is in mocha table (see http://github.com/openwdl/wdl/issues/305)
     Boolean is_path_in_mocha_tbl = length(collect_by_key(zip(flatten([keys(mocha_tbl),["path"]]),range(length(keys(mocha_tbl))+1)))["path"])>1
 
     # compute data paths for each batch
@@ -290,7 +290,7 @@ workflow assoc {
           File? firth_file = if defined(firth_lines) then select_first([regenie_step1.firth_file]) else None
         }
       }
-      # unnecessary task for compatibility with Terra https://support.terra.bio/hc/en-us/community/posts/360071465631-write-lines-write-map-write-tsv-write-json-fail-when-run-in-a-workflow-rather-than-in-a-task
+      # unnecessary task for compatibility with Terra http://support.terra.bio/hc/en-us/community/posts/360071465631-write-lines-write-map-write-tsv-write-json-fail-when-run-in-a-workflow-rather-than-in-a-task
       call serialize_lines as loco_lst { input: lines = select_all(loco_lines), filename = filebase + "_pred.list", docker = basic_bash_docker }
       if (binary) {
         call serialize_lines as firth_lst { input: lines = select_all(firth_lines), filename = filebase + "_firth.list", docker = basic_bash_docker }
@@ -335,7 +335,7 @@ workflow assoc {
     Int n_impute_batches = length(impute_tsv)-1
     scatter (idx in range(n_impute_batches)) { Array[String] impute_tsv_rows = impute_tsv[(idx+1)] }
     Map[String, Array[String]] impute_tbl = as_map(zip(impute_tsv[0], transpose(impute_tsv_rows)))
-    # check if path is in impute table (see https://github.com/openwdl/wdl/issues/305)
+    # check if path is in impute table (see http://github.com/openwdl/wdl/issues/305)
     Boolean is_path_in_impute_tbl = length(collect_by_key(zip(flatten([keys(impute_tbl),["path"]]),range(length(keys(impute_tbl))+1)))["path"])>1
 
     # compute data paths for each batch
@@ -369,12 +369,12 @@ workflow assoc {
     if (step2) {
       # generate list of expected output association files
       scatter (line in read_lines(select_first([firth_lst.file, loco_lst.file, input_firth_lst, input_loco_lst]))) {
-        String regenie_suffix = sub(line, " .*$", "") + (if defined(pop) then "." + select_first([pop]) else "") + ".regenie.gz" # https://github.com/broadinstitute/cromwell/issues/5549
+        String regenie_suffix = sub(line, " .*$", "") + (if defined(pop) then "." + select_first([pop]) else "") + ".regenie.gz" # http://github.com/broadinstitute/cromwell/issues/5549
       }
     }
 
     # merging has to happen at the VCF level as plink2 does not currently merge pgen files
-    # https://www.cog-genomics.org/plink/2.0/data#pmerge
+    # http://www.cog-genomics.org/plink/2.0/data#pmerge
     scatter (idx in range(length(matrix_vcf_files))) {
       if (length(matrix_vcf_files[idx])>1 || defined(min_mac_step2)) {
         call vcf_merge {
@@ -413,7 +413,7 @@ workflow assoc {
             covar_file = prune_file.covar,
             pheno_file = select_first([prune_file.pheno]),
             pop = pop,
-            regenie_suffix = select_first([regenie_suffix]), # https://github.com/broadinstitute/cromwell/issues/5549
+            regenie_suffix = select_first([regenie_suffix]), # http://github.com/broadinstitute/cromwell/issues/5549
             binary = binary,
             bsize = bsize_step2,
             min_info = min_info_step2,
@@ -468,7 +468,7 @@ workflow assoc {
       scatter (idx in range(length(lines))) {
         String plink_pheno_names = if defined(loco_lst.file) || defined(input_loco_lst) then sub(lines[idx], " .*$", "") else lines[idx]
         String plink_pheno_chrs = sub(sub(sub(plink_pheno_names, "_.*$", ""), "[pq]*$", ""), "Y", "X")
-        # check if plink_pheno_chrs is present in the chr2idx to know whether the cis association should be run (see https://github.com/openwdl/wdl/issues/305)
+        # check if plink_pheno_chrs is present in the chr2idx to know whether the cis association should be run (see http://github.com/openwdl/wdl/issues/305)
         Int? cis_idx = if length(collect_by_key(zip(flatten([keys(chr2idx),[plink_pheno_chrs]]),range(length(keys(chr2idx))+1)))[plink_pheno_chrs])>1 then idx else None
       }
       # this map, given a chromosome (1, 2, ..., X), returns the indexes of the intervals for that chromosomes
@@ -558,7 +558,7 @@ workflow assoc {
   meta {
     author: "Giulio Genovese"
     email: "giulio.genovese@gmail.com"
-    description: "See the [MoChA](https://github.com/freeseek/mocha) website for more information"
+    description: "See the [MoChA](http://github.com/freeseek/mocha) website for more information"
   }
 }
 
@@ -595,7 +595,7 @@ task get_n {
   }
 }
 
-# use of !(a!=b) due to bug Cromwell team will not fix: https://github.com/broadinstitute/cromwell/issues/5602
+# use of !(a!=b) due to bug Cromwell team will not fix: http://github.com/broadinstitute/cromwell/issues/5602
 task prune_file {
   input {
     String? sex_specific
@@ -655,7 +655,7 @@ task prune_file {
     ~{if defined(covar_tsv_file) then "cat \"" + filebase + "." +
       (if defined(sex_specific) then select_first([sex_specific]) else "male\" \"" + filebase + ".female") + "\" | \\\n" +
       "  awk -F\"\\t\" 'NR==FNR {sex[$1]=$2} NR>FNR && (FNR==1 || $1 in sex) {if (FNR==1) printf \"FID\\tIID" + (if defined(sex_specific) then "" else "\\tsex") + "\"\n" +
-      "  else {gsub(\" \",\"" + space_character + "\",$1); printf \"0\\t%s" + (if defined(sex_specific) then "" else "\\t%s") + "\",$1" + (if defined(sex_specific) then "" else ",sex[$1]") + "}\n" +
+      "  else {sex_cov=sex[$1]; gsub(\" \",\"" + space_character + "\",$1); printf \"0\\t%s" + (if defined(sex_specific) then "" else "\\t%s") + "\",$1" + (if defined(sex_specific) then "" else ",sex_cov") + "}\n" +
       "  for (i=2; i<=NF; i++) printf \"\\t%s\",$i; printf \"\\n\"}' \\\n" +
       "  - \"" + basename(select_first([covar_tsv_file])) + "\" > \"" + filebase + ".cov\"\n"
       else if !defined(sex_specific) then
@@ -751,7 +751,7 @@ task ref_scatter {
   }
 }
 
-# the command requires BCFtools 1.15 due to bug https://github.com/samtools/bcftools/issues/1631
+# the command requires BCFtools 1.15 due to bug http://github.com/samtools/bcftools/issues/1631
 task vcf_scatter {
   input {
     File vcf_file
@@ -903,10 +903,10 @@ task vcf_merge {
   }
 }
 
-# this command needs PLINK 1.9 as conversion from VCF using PLINK 2.0 is inefficient: https://groups.google.com/g/plink2-users/c/hsByNOklyA0
-# the U sex needs to be encoded as 0 as this is the only accepted value for PLINK 1.9: https://groups.google.com/g/plink2-users/c/z7YJYa677NQ
-# use of !(a!=b) due to bug Cromwell team will not fix: https://github.com/broadinstitute/cromwell/issues/5602
-# the command requires BCFtools 1.14 due to bug https://github.com/samtools/bcftools/issues/1528
+# this command needs PLINK 1.9 as conversion from VCF using PLINK 2.0 is inefficient: http://groups.google.com/g/plink2-users/c/hsByNOklyA0
+# the U sex needs to be encoded as 0 as this is the only accepted value for PLINK 1.9: http://groups.google.com/g/plink2-users/c/z7YJYa677NQ
+# use of !(a!=b) due to bug Cromwell team will not fix: http://github.com/broadinstitute/cromwell/issues/5602
+# the command requires BCFtools 1.14 due to bug http://github.com/samtools/bcftools/issues/1528
 task pgt_prune {
   input {
     File vcf_file
@@ -1071,7 +1071,7 @@ task plink_pca {
   Float bim_size = size(bim_file, "GiB")
   Float fam_size = size(fam_file, "GiB")
   Int disk_size = select_first([disk_size_override, ceil(10.0 + 2.0 * (bed_size + bim_size + fam_size))])
-  # https://groups.google.com/g/plink2-users/c/qGiWkqhuvcY/m/kpeS3FfQBAAJ
+  # http://groups.google.com/g/plink2-users/c/qGiWkqhuvcY/m/kpeS3FfQBAAJ
   Float memory = select_first([memory_override, 3.5 + (16.0 * pca_ndim * (pca_ndim + 1) * (n_markers + if n_markers > n_smpls then n_markers else n_smpls) + (16.0 * pca_ndim * (pca_ndim + 1) + 5760.0) * n_smpls * pca_cpus) / 1024 / 1024 / 1024])
   Int cpu = select_first([cpu_override, if 2 * ceil(memory / 13) > pca_cpus then 2 * ceil(memory / 13) else pca_cpus]) # always require at least two CPUs
 
@@ -1120,7 +1120,7 @@ task plink_pca {
   }
 }
 
-# see https://github.com/rgcgithub/regenie/wiki/Further-parallelization-for-level-0-models-in-Step-1
+# see http://github.com/rgcgithub/regenie/wiki/Further-parallelization-for-level-0-models-in-Step-1
 task regenie_step0 {
   input {
     Int idx
@@ -1154,7 +1154,7 @@ task regenie_step0 {
   Float bed_size = size(bed_file, "GiB")
   Float bim_size = size(bim_file, "GiB")
   Float fam_size = size(fam_file, "GiB")
-  # see print_usage_info() in https://github.com/rgcgithub/regenie/blob/master/src/Regenie.cpp
+  # see print_usage_info() in http://github.com/rgcgithub/regenie/blob/master/src/Regenie.cpp
   Int disk_size = select_first([disk_size_override, ceil(10.0 + bed_size + bim_size + fam_size + 8.0 * n_phenos * ceil(n_markers / bsize) * n_ridge_l0 * n_smpls / 1024 / 1024 / 1024)])
   Float memory = select_first([memory_override, 3.5 + mult * 8.0 * (bsize + n_phenos * (4.0 + n_ridge_l0) + n_covars) * n_smpls / 1024 / 1024 / 1024])
   Int cpu = select_first([cpu_override, if memory > 6.5 then 2 * ceil(memory / 13) else 1])
@@ -1207,7 +1207,7 @@ task regenie_step0 {
   }
 }
 
-# see https://github.com/rgcgithub/regenie/wiki/Further-parallelization-for-level-0-models-in-Step-1
+# see http://github.com/rgcgithub/regenie/wiki/Further-parallelization-for-level-0-models-in-Step-1
 task regenie_step1 {
   input {
     String pheno_name
@@ -1250,7 +1250,7 @@ task regenie_step1 {
     l0_files=~{write_lines(l0_files)}
     echo "~{sep("\n", select_all([bed_file, bim_file, fam_file, covar_file, pheno_file]))}" | \
       cat - $l0_files | tr '\n' '\0' | xargs -0 mv -t .
-    cat $l0_files | sed 's/^.*\///;s/.*/& &/;s/[0-9]*$/1/' | while read src dst; do mv --no-clobber $src $dst; done
+    cat $l0_files | sed '/_Y1$/d;s/^.*\///;s/.*/& &/;s/[0-9]*$/1/' | while read src dst; do mv --no-clobber $src $dst; done
     sed -i 's/^.*\///;s/[0-9]*$/1/' $l0_files
     awk -F"\t" -v OFS="\t" 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}
       {print $(f["FID"]),$(f["IID"]),$(f["~{pheno_name}"])}' "~{basename(pheno_file)}" > "~{basename(pheno_file)}.~{pheno_name}"
@@ -1348,11 +1348,11 @@ task serialize_lines {
 }
 
 # number of variants and sample should be input here
-# option psam-cols=fid,sex required due to https://github.com/rgcgithub/regenie/issues/105
+# option psam-cols=fid,sex required due to http://github.com/rgcgithub/regenie/issues/105
 #
-# PLINK2 tries to access more memory than assigned https://groups.google.com/g/plink2-users/c/eLxA5JCwRH0/m/gZmm8RhJAgAJ
-# PLINK2 unfortunately needs to read a VCF file twice https://groups.google.com/g/plink2-users/c/hsByNOklyA0/m/ZUHf1MpvAQAJ
-# PLINK2 unfortunately cannot split PAR with non-human genomes https://groups.google.com/g/plink2-users/c/88W9O02WXfI
+# PLINK2 tries to access more memory than assigned http://groups.google.com/g/plink2-users/c/eLxA5JCwRH0/m/gZmm8RhJAgAJ
+# PLINK2 unfortunately needs to read a VCF file twice http://groups.google.com/g/plink2-users/c/hsByNOklyA0/m/ZUHf1MpvAQAJ
+# PLINK2 unfortunately cannot split PAR with non-human genomes http://groups.google.com/g/plink2-users/c/88W9O02WXfI
 task vcf2pgen {
   input {
     File vcf_file
@@ -1373,7 +1373,7 @@ task vcf2pgen {
     Float mult = 4.0 # this is to make sure that there is space for the .bcf, the -temporary.pgen, and the .pgen files
     # notice that the .pgen can occupy more space than the .bcf as each encoded dosage requires 2 bytes to be encoded
     # and only dosages that have dosage level identical to their respective genotypes are not encoded
-    # see https://docs.juliahub.com/PGENFiles/76R2z/0.1.0/PGEN_description/#Dosages-1
+    # see http://docs.juliahub.com/PGENFiles/76R2z/0.1.0/PGEN_description/#Dosages-1
   }
 
   String filebase = basename(basename(vcf_file, ".bcf"), ".vcf.gz")
@@ -1384,7 +1384,7 @@ task vcf2pgen {
     set -euo pipefail
     mv "~{vcf_file}" .
     mv "~{sample_tsv_file}" .
-    awk 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}
+    awk -F"\t" 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}
       NR>1 {id=$(f["sample_id"]); gsub(" ","~{space_character}",id);
       print 0,id,$(f["computed_gender"])}' "~{basename(sample_tsv_file)}" | \
       sed 's/U$/0/;s/K$/1/' > "~{filebase}.sex"
@@ -1426,9 +1426,9 @@ task vcf2pgen {
   }
 }
 
-# loco file needs to be pruned due to bug https://github.com/rgcgithub/regenie/issues/199
-# write_lines() hack needed due to bug https://github.com/broadinstitute/cromwell/issues/5540
-# see https://github.com/MRCIEU/gwas-vcf-specification for VCF output
+# loco file needs to be pruned due to bug http://github.com/rgcgithub/regenie/issues/199
+# write_lines() hack needed due to bug http://github.com/broadinstitute/cromwell/issues/5540
+# see http://github.com/MRCIEU/gwas-vcf-specification for VCF output
 task regenie_step2 {
   input {
     String chr
@@ -1443,7 +1443,7 @@ task regenie_step2 {
     File? covar_file
     File pheno_file
     String? pop
-    Array[String]+ regenie_suffix # suffix array passed due to bug https://github.com/broadinstitute/cromwell/issues/5549
+    Array[String]+ regenie_suffix # suffix array passed due to bug http://github.com/broadinstitute/cromwell/issues/5549
     Boolean binary
     File loco_lst
     Array[File]+ loco_files
@@ -1467,7 +1467,7 @@ task regenie_step2 {
   Float pvar_size = size(pvar_file, "GiB")
   Float psam_size = size(psam_file, "GiB")
   Int disk_size = select_first([disk_size_override, ceil(10.0 + pgen_size + pvar_size + psam_size)])
-  # see print_usage_info() in https://github.com/rgcgithub/regenie/blob/master/src/Regenie.cpp
+  # see print_usage_info() in http://github.com/rgcgithub/regenie/blob/master/src/Regenie.cpp
   Float memory = select_first([memory_override, 3.5 + 8.0 * (3.0 * n_phenos + 2.0 * bsize + n_covars + if binary then (3.0 + n_covars) * n_phenos + 0.5 * bsize else 0) * n_smpls / 1024 / 1024 / 1024])
   Int cpu = select_first([cpu_override, 2 * ceil(memory / 13)]) # always require at least two CPUs
 
@@ -1533,7 +1533,7 @@ task regenie_step2 {
   output {
     File vcf_file = filebase + (if defined(pop) then "." + select_first([pop]) else "") + ".gwas.bcf"
     File log_file = "logs/" + filebase + ".step2.log"
-    Array[File] regenie_files = prefix(filebase + "_", regenie_suffix) # suffix array passed due to bug https://github.com/broadinstitute/cromwell/issues/5549
+    Array[File] regenie_files = prefix(filebase + "_", regenie_suffix) # suffix array passed due to bug http://github.com/broadinstitute/cromwell/issues/5549
   }
 
   runtime {
@@ -1606,7 +1606,7 @@ task vcf_concat {
       "bcftools annotate \\\n" +
       "  --no-version \\\n" +
       "  --annotations \"" + basename(select_first([rsid_vcf_file])) + "\" \\\n" +
-      "  --columns RS \\\n" +
+      "  --columns ID \\\n" +
       "  --output \"" + filebase + ".bcf\" \\\n" +
       "  --output-type b \\\n" +
       "  \"" + filebase + ".tmp.bcf\" \\\n" +
@@ -1728,10 +1728,10 @@ task assoc_plot {
   }
 }
 
-# use of !(a!=b) due to bug Cromwell team will not fix: https://github.com/broadinstitute/cromwell/issues/5602
+# use of !(a!=b) due to bug Cromwell team will not fix: http://github.com/broadinstitute/cromwell/issues/5602
 # plink2 will return error code 7 when covariate-only Firth regression fails to converge or when variance inflation factor is too high
 # plink2 will return error code 13 when no diploid variants remain for --glm hetonly
-# when PLINK2 updates to version Mar 18 2024 or newer, you can remove the single-prec-cc otions https://groups.google.com/g/plink2-users/c/4oKzPt_Xi74/m/z--hBJV-AgAJ
+# when PLINK2 updates to version Mar 18 2024 or newer, you can remove the single-prec-cc otions http://groups.google.com/g/plink2-users/c/4oKzPt_Xi74/m/z--hBJV-AgAJ
 task plink_glm {
   input {
     String chr_num

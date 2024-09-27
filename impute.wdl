@@ -2,14 +2,14 @@ version development
 
 ## Copyright (c) 2021-2024 Giulio Genovese
 ##
-## Version 2024-05-05
+## Version 2024-09-27
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs impute5 or beagle5 on a set of VCFs
 ##
 ## Cromwell version support
-## - Successfully tested on v86
+## - Successfully tested on v87
 ##
 ## Distributed under terms of the MIT License
 
@@ -60,9 +60,9 @@ workflow impute {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.20-20240505"
-    String impute5_docker = "impute5:1.20-20240505"
-    String beagle5_docker = "beagle5:1.20-20240505"
+    String bcftools_docker = "bcftools:1.20-20240927"
+    String impute5_docker = "impute5:1.20-20240927"
+    String beagle5_docker = "beagle5:1.20-20240927"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -85,7 +85,7 @@ workflow impute {
   Int n_mocha_batches = length(mocha_tsv)-1
   scatter (idx in range(n_mocha_batches)) { Array[String] mocha_tsv_rows = mocha_tsv[(idx+1)] }
   Map[String, Array[String]] mocha_tbl = as_map(zip(mocha_tsv[0], transpose(mocha_tsv_rows)))
-  # check if path is in mocha table (see https://github.com/openwdl/wdl/issues/305)
+  # check if path is in mocha table (see http://github.com/openwdl/wdl/issues/305)
   Boolean is_path_in_mocha_tbl = length(collect_by_key(zip(flatten([keys(mocha_tbl),["path"]]),range(length(keys(mocha_tbl))+1)))["path"])>1
 
   # compute data paths for each batch
@@ -294,12 +294,12 @@ workflow impute {
   Map[String, Array[String]] output_map = as_map(flatten([[("batch_id", mocha_tbl["batch_id"]),
     ("n_smpls", n_smpls)], as_pairs(collect_by_key(output_vcfs)), as_pairs(collect_by_key(output_idxs))]))
   # cannot use output_keys = keys(output_map) because of unresolved Cromwell bug
-  # https://github.com/broadinstitute/cromwell/issues/5559
+  # http://github.com/broadinstitute/cromwell/issues/5559
   scatter (idx in range(n_chrs)) { Array[String] keys = ["chr" + chr_strings[idx] + "_imp_vcf", "chr" + chr_strings[idx] + "_imp_vcf_index"] }
   Array[String] output_keys = flatten([["batch_id", "n_smpls"], flatten(keys)])
   scatter (key in output_keys) { Array[String] output_tsv_cols = output_map[key] }
   # this is run as a separate task rather than using write_tsv() as Cromwell can break the WDL specification
-  # https://support.terra.bio/hc/en-us/community/posts/360071465631-write-lines-write-map-write-tsv-write-json-fail-when-run-in-a-workflow-rather-than-in-a-task
+  # http://support.terra.bio/hc/en-us/community/posts/360071465631-write-lines-write-map-write-tsv-write-json-fail-when-run-in-a-workflow-rather-than-in-a-task
   call write_tsv {
     input:
       tsv = flatten([[output_keys], transpose(output_tsv_cols)]),
@@ -317,7 +317,7 @@ workflow impute {
   meta {
     author: "Giulio Genovese"
     email: "giulio.genovese@gmail.com"
-    description: "See the [MoChA](https://github.com/freeseek/mocha) website for more information"
+    description: "See the [MoChA](http://github.com/freeseek/mocha) website for more information"
   }
 }
 
@@ -599,8 +599,8 @@ task init_beagle5_panel {
   }
 }
 
-# hack https://github.com/samtools/bcftools/issues/1425 is employed in the end to fix the header
-# the command requires BCFtools 1.14 due to bug https://github.com/samtools/bcftools/issues/1497
+# hack http://github.com/samtools/bcftools/issues/1425 is employed in the end to fix the header
+# the command requires BCFtools 1.14 due to bug http://github.com/samtools/bcftools/issues/1497
 task vcf_beagle5 {
   input {
     Int n_smpls
@@ -790,8 +790,8 @@ task init_impute5_panel {
   }
 }
 
-# hack https://github.com/samtools/bcftools/issues/1425 is employed in the end to fix the header
-# the command requires BCFtools 1.14 due to bug https://github.com/samtools/bcftools/issues/1497
+# hack http://github.com/samtools/bcftools/issues/1425 is employed in the end to fix the header
+# the command requires BCFtools 1.14 due to bug http://github.com/samtools/bcftools/issues/1497
 task vcf_impute5 {
   input {
     Int n_smpls

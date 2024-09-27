@@ -2,7 +2,7 @@ version development
 
 ## Copyright (c) 2021-2024 Giulio Genovese
 ##
-## Version 2024-05-05
+## Version 2024-09-27
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
@@ -44,8 +44,8 @@ workflow score {
     String? include_str
     String basic_bash_docker = "debian:stable-slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.20-20240505"
-    String r_mocha_docker = "r_mocha:1.20-20240505"
+    String bcftools_docker = "bcftools:1.20-20240927"
+    String r_mocha_docker = "r_mocha:1.20-20240927"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -64,7 +64,7 @@ workflow score {
   Int n_batches = length(impute_tsv)-1
   scatter (idx in range(n_batches)) { Array[String] impute_tsv_rows = impute_tsv[(idx+1)] }
   Map[String, Array[String]] impute_tbl = as_map(zip(impute_tsv[0], transpose(impute_tsv_rows)))
-  # check if path is in impute table (see https://github.com/openwdl/wdl/issues/305)
+  # check if path is in impute table (see http://github.com/openwdl/wdl/issues/305)
   Boolean is_path_in_impute_tbl = length(collect_by_key(zip(flatten([keys(impute_tbl),["path"]]),range(length(keys(impute_tbl))+1)))["path"])>1
 
   # compute data paths for each batch
@@ -121,7 +121,7 @@ workflow score {
   meta {
     author: "Giulio Genovese"
     email: "giulio.genovese@gmail.com"
-    description: "See the [MoChA](https://github.com/freeseek/mocha) website for more information"
+    description: "See the [MoChA](http://github.com/freeseek/mocha) website for more information"
   }
 }
 

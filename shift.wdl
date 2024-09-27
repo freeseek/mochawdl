@@ -2,7 +2,7 @@ version development
 
 ## Copyright (c) 2021-2024 Giulio Genovese
 ##
-## Version 2024-05-05
+## Version 2024-09-27
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
@@ -56,8 +56,8 @@ workflow shift {
     Boolean plot = true
     String basic_bash_docker = "debian:stable-slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.20-20240505"
-    String r_mocha_docker = "r_mocha:1.20-20240505"
+    String bcftools_docker = "bcftools:1.20-20240927"
+    String r_mocha_docker = "r_mocha:1.20-20240927"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -94,7 +94,7 @@ workflow shift {
   Int n_batches = length(impute_tsv)-1
   scatter (idx in range(n_batches)) { Array[String] impute_tsv_rows = impute_tsv[(idx+1)] }
   Map[String, Array[String]] impute_tbl = as_map(zip(impute_tsv[0], transpose(impute_tsv_rows)))
-  # check if path is in impute table (see https://github.com/openwdl/wdl/issues/305)
+  # check if path is in impute table (see http://github.com/openwdl/wdl/issues/305)
   Boolean is_path_in_impute_tbl = length(collect_by_key(zip(flatten([keys(impute_tbl),["path"]]),range(length(keys(impute_tbl))+1)))["path"])>1
 
   # compute data paths for each batch
@@ -112,8 +112,8 @@ workflow shift {
       Int pheno_idx = idx
       String pheno_chr = chr_string
       String pheno_name = lst_header.phenos[idx]
-      String vcf_file_suffix = pheno_name + "." + ext_string + ".bcf" # https://github.com/broadinstitute/cromwell/issues/5549
-      String vcf_idx_suffix = pheno_name + "." + ext_string + ".bcf.csi" # https://github.com/broadinstitute/cromwell/issues/5549
+      String vcf_file_suffix = pheno_name + "." + ext_string + ".bcf" # http://github.com/broadinstitute/cromwell/issues/5549
+      String vcf_idx_suffix = pheno_name + "." + ext_string + ".bcf.csi" # http://github.com/broadinstitute/cromwell/issues/5549
       Int chr_idx = sub(chr_string, "^X$", ref.n_x_chr)
       String arm = sub(region_name, "^[0-9XY]*", "")
       String pheno_regions = ref.chr_prefix + chr_string + if arm == "p" then ":1-" + ref.pcen[(chr_idx - 1)] else if arm == "q" then ":" + ref.qcen[(chr_idx - 1)] + "-" + ref.len[(chr_idx - 1)] else ""
@@ -124,8 +124,8 @@ workflow shift {
   Map[String, Array[String]] chr2pheno_idx = collect_by_key(zip(select_all(pheno_chr), select_all(pheno_idx)))
   Map[String, Array[String]] chr2pheno_names = collect_by_key(zip(select_all(pheno_chr), select_all(pheno_name)))
   Map[String, Array[String]] chr2regions = collect_by_key(zip(select_all(pheno_chr), select_all(pheno_regions)))
-  Map[String, Array[String]] chr2vcf_file_suffix = collect_by_key(zip(select_all(pheno_chr), select_all(vcf_file_suffix))) # https://github.com/broadinstitute/cromwell/issues/5549
-  Map[String, Array[String]] chr2vcf_idx_suffix = collect_by_key(zip(select_all(pheno_chr), select_all(vcf_idx_suffix))) # https://github.com/broadinstitute/cromwell/issues/5549
+  Map[String, Array[String]] chr2vcf_file_suffix = collect_by_key(zip(select_all(pheno_chr), select_all(vcf_file_suffix))) # http://github.com/broadinstitute/cromwell/issues/5549
+  Map[String, Array[String]] chr2vcf_idx_suffix = collect_by_key(zip(select_all(pheno_chr), select_all(vcf_idx_suffix))) # http://github.com/broadinstitute/cromwell/issues/5549
   scatter (p in cross(range(n_batches), keys(chr2pheno_names))) {
     Array[Int] cross_idx = chr2pheno_idx[p.right]
     call vcf_summary {
@@ -134,8 +134,8 @@ workflow shift {
         vcf_idx = impute_data_paths_with_sep[p.left] + impute_tbl[("chr" + p.right + "_imp_vcf_index")][p.left],
         pheno_names = chr2pheno_names[p.right],
         regions = chr2regions[p.right],
-        vcf_file_suffix = chr2vcf_file_suffix[p.right], # https://github.com/broadinstitute/cromwell/issues/5549
-        vcf_idx_suffix = chr2vcf_idx_suffix[p.right], # https://github.com/broadinstitute/cromwell/issues/5549
+        vcf_file_suffix = chr2vcf_file_suffix[p.right], # http://github.com/broadinstitute/cromwell/issues/5549
+        vcf_idx_suffix = chr2vcf_idx_suffix[p.right], # http://github.com/broadinstitute/cromwell/issues/5549
         keep_samples_file = keep_samples_file,
         remove_samples_file = remove_samples_file,
         pheno_tsv_file = pheno_tsv_file,
@@ -194,7 +194,7 @@ workflow shift {
   meta {
     author: "Giulio Genovese"
     email: "giulio.genovese@gmail.com"
-    description: "See the [MoChA](https://github.com/freeseek/mocha) website for more information"
+    description: "See the [MoChA](http://github.com/freeseek/mocha) website for more information"
   }
 }
 
@@ -232,15 +232,15 @@ task lst_header {
   }
 }
 
-# the command requires BCFtools 1.14 due to bug https://github.com/samtools/bcftools/issues/1566
+# the command requires BCFtools 1.14 due to bug http://github.com/samtools/bcftools/issues/1566
 task vcf_summary {
   input {
     File vcf_file
     File vcf_idx
     Array[String]+ pheno_names
     Array[String]+ regions
-    Array[String]+ vcf_file_suffix # suffix array passed due to bug https://github.com/broadinstitute/cromwell/issues/5549
-    Array[String]+ vcf_idx_suffix # suffix array passed due to bug https://github.com/broadinstitute/cromwell/issues/5549
+    Array[String]+ vcf_file_suffix # suffix array passed due to bug http://github.com/broadinstitute/cromwell/issues/5549
+    Array[String]+ vcf_idx_suffix # suffix array passed due to bug http://github.com/broadinstitute/cromwell/issues/5549
     File? keep_samples_file
     File? remove_samples_file
     File pheno_tsv_file
@@ -326,9 +326,9 @@ task vcf_summary {
   }
 }
 
-# bcftools annotate needs --regions due to bug https://github.com/samtools/bcftools/issues/1199
-# see https://github.com/MRCIEU/gwas-vcf-specification for VCF output
-# see Marchini, J., Howie, B. Genotype imputation for genome-wide association studies. Nat Rev Genet 11, 499–511 (2010). https://doi.org/10.1038/nrg2796
+# bcftools annotate needs --regions due to bug http://github.com/samtools/bcftools/issues/1199
+# see http://github.com/MRCIEU/gwas-vcf-specification for VCF output
+# see Marchini, J., Howie, B. Genotype imputation for genome-wide association studies. Nat Rev Genet 11, 499–511 (2010). http://doi.org/10.1038/nrg2796
 task vcf_merge {
   input {
     Array[File]+ vcf_files
@@ -400,7 +400,7 @@ task vcf_merge {
       "bcftools annotate \\\n" +
       "  --no-version \\\n" +
       "  --annotations \"" + basename(select_first([rsid_vcf_file])) + "\" \\\n" +
-      "  --columns RS \\\n" +
+      "  --columns ID \\\n" +
       "  --output \"" + filebase + ".bcf\" \\\n" +
       "  --output-type b \\\n" +
       "  --regions \"" + region + "\" \\\n" +

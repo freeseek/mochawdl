@@ -2,14 +2,14 @@ version development
 
 ## Copyright (c) 2020-2024 Giulio Genovese
 ##
-## Version 2024-05-05
+## Version 2024-09-27
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs MoChA on a cohort of samples genotyped with either Illumina or Affymetrix DNA microarrays
 ##
 ## Cromwell version support
-## - Successfully tested on v86
+## - Successfully tested on v87
 ##
 ## Distributed under terms of the MIT License
 
@@ -81,10 +81,10 @@ workflow mocha {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.20-20240505"
-    String apt_docker = "apt:1.20-20240505"
-    String shapeit5_docker = "shapeit5:1.20-20240505"
-    String r_mocha_docker = "r_mocha:1.20-20240505"
+    String bcftools_docker = "bcftools:1.20-20240927"
+    String apt_docker = "apt:1.20-20240927"
+    String shapeit5_docker = "shapeit5:1.20-20240927"
+    String r_mocha_docker = "r_mocha:1.20-20240927"
     Boolean? table_output
     Boolean do_not_use_reference = false
     Boolean use_shapeit5_ligate = false
@@ -124,7 +124,7 @@ workflow mocha {
   scatter (idx in range(n_batches)) { Array[String] batch_tsv_rows = batch_tsv[(idx+1)] }
   Map[String, Array[String]] batch_tbl = as_map(zip(batch_tsv[0], transpose(batch_tsv_rows)))
   Array[String] batches = batch_tbl["batch_id"]
-  # check which variables are in batch table (see https://github.com/openwdl/wdl/issues/305)
+  # check which variables are in batch table (see http://github.com/openwdl/wdl/issues/305)
   Boolean is_path_in_batch_tbl = length(collect_by_key(zip(flatten([keys(batch_tbl),["path"]]),range(length(keys(batch_tbl))+1)))["path"])>1
   Boolean is_sam_in_batch_tbl = length(collect_by_key(zip(flatten([keys(batch_tbl),["sam"]]),range(length(keys(batch_tbl))+1)))["sam"])>1
   Boolean is_probeset_ids_in_batch_tbl = length(collect_by_key(zip(flatten([keys(batch_tbl),["probeset_ids"]]),range(length(keys(batch_tbl))+1)))["probeset_ids"])>1
@@ -427,6 +427,7 @@ workflow mocha {
           variant_call_rate_thr = variant_call_rate_thr,
           duplicate_samples_file = duplicate_samples_file,
           extra_xcl_vcf_file = if defined(extra_xcl_vcf_file) then select_first([xcl_vcf_scatter.vcf_files])[idx] else None,
+          fix_ploidy = wgs,
           docker = docker_repository_with_sep + bcftools_docker
       }
       Int buffer_beg = intervals_tbl[1][idx] # cast string to integer
@@ -451,7 +452,7 @@ workflow mocha {
           scaffold_region = intervals_tbl[0][idx] + ":" + (1 + buffer_beg) + "-" + buffer_end,
           chr = intervals_tbl[0][idx],
           mhc = if defined(ref.mhc_reg) then intervals_tbl[0][idx] == select_first([mhc_chr]) && beg <= select_first([mhc_end]) && end > select_first([mhc_beg]) else false,
-          maf = if wgs && n_smpls > 2000 then 0.001 else 0.0, # see https://odelaneau.github.io/shapeit5/docs/documentation/phase_rare/
+          maf = if wgs && n_smpls > 2000 then 0.001 else 0.0, # see http://odelaneau.github.io/shapeit5/docs/documentation/phase_rare/
           phase_extra_args = phase_extra_args,
           docker = docker_repository_with_sep + shapeit5_docker
       }
@@ -512,6 +513,7 @@ workflow mocha {
           kir_reg = ref.kir_reg,
           mocha_extra_args = mocha_extra_args,
           ext_string = ext_string,
+          wgs = wgs,
           docker = docker_repository_with_sep + bcftools_docker
       }
       if (target == "pngs") {
@@ -568,13 +570,13 @@ workflow mocha {
     ("pgt_vcf_index", basename_pgt_vcf_idxs)]])
   Map[String, Array[String]] output_map = as_map(output_pairs)
   # cannot use output_keys = keys(output_map) because of unresolved Cromwell bug
-  # https://github.com/broadinstitute/cromwell/issues/5559
+  # http://github.com/broadinstitute/cromwell/issues/5559
   scatter (p in output_pairs) {
     String output_keys = p.left
     Array[String] output_tsv_cols = output_map[p.left]
   }
   # this is run as a separate task rather than using write_tsv() as Cromwell can break the WDL specification
-  # https://support.terra.bio/hc/en-us/community/posts/360071465631-write-lines-write-map-write-tsv-write-json-fail-when-run-in-a-workflow-rather-than-in-a-task
+  # http://support.terra.bio/hc/en-us/community/posts/360071465631-write-lines-write-map-write-tsv-write-json-fail-when-run-in-a-workflow-rather-than-in-a-task
   call write_tsv {
     input:
       tsv = flatten([[output_keys], transpose(output_tsv_cols)]),
@@ -609,7 +611,7 @@ workflow mocha {
   meta {
     author: "Giulio Genovese (with help from Chris Whelan)"
     email: "giulio.genovese@gmail.com"
-    description: "See the [MoChA](https://github.com/freeseek/mocha) website for more information"
+    description: "See the [MoChA](http://github.com/freeseek/mocha) website for more information"
   }
 }
 
@@ -618,6 +620,7 @@ task tsv_sorted {
     File tsv_file
     String column
     Boolean check_dups = false
+    Boolean check_empty = true
 
     String docker
     Int cpu = 1
@@ -639,8 +642,12 @@ task tsv_sorted {
     fi
     cat "~{basename(tsv_file)}" | sed 's/\r$//' | (read -r; printf "%s\n" "$REPLY"; sort -k $col,$col -s -t $'\t' -T .) > "~{filebase}.sorted.tsv"
     ~{if check_dups then
-      "dups=$(tail -n+2 \"" + filebase + ".sorted.tsv\" | sed 's/\\r$//' | cut -f$col | uniq --repeated)\n" +
+      "dups=$(tail -n+2 \"" + filebase + ".sorted.tsv\" | sed 's/\\r$//' | awk -F\"\\t\" -v col=\"$col\" '{print $col}' | uniq --repeated)\n" +
       "if [[ ! -z \"$dups\" ]]; then\n  echo -e \"Duplicate " + column + "(s) found:\\n$dups\" 1>&2\n  exit 1\nfi"
+    else ""}
+    ~{if check_empty then
+      "empty=$(tail -n+2 \"" + basename(tsv_file) + "\" | sed 's/\\r$//' | awk -F\"\\t\" -v col=\"$col\" '$col==\"\"')\n" +
+      "if [[ ! -z \"$empty\" ]]; then\n    echo -e \"Empty " + column + "(s) found at line:\\n$empty\" 1>&2\n  exit 1\nfi"
     else ""}
     rm "~{basename(tsv_file)}"
   >>>
@@ -665,6 +672,7 @@ task tsv_column {
     String column
     Boolean fail = true
     Boolean check_dups = false
+    Boolean check_empty = true
 
     String docker
     Int cpu = 1
@@ -679,22 +687,26 @@ task tsv_column {
     mv "~{tsv_file}" .
     col=$(head -n1 "~{basename(tsv_file)}" | sed 's/\r$//' | tr '\t' '\n' | awk -F"\t" '$0=="~{column}" {print NR}')
     if [ "$col" == "" ]; then
-      ~{if fail then
-        "echo \"Column \\\"" + column + "\\\" does not exist\" 1>&2\n" +
-        "exit 1"
-      else
-        "touch \"" + column + ".lines\"\n" +
-        "echo \"true\""}
+    ~{if fail then
+      "  echo \"Column \\\"" + column + "\\\" does not exist\" 1>&2\n" +
+      "  exit 1"
     else
-      ~{if check_dups then
-        "dups=$(tail -n+2 \"" + basename(tsv_file) + "\" | sed 's/\\r$//' | cut -f$col | sort | uniq --repeated)\n" +
-        "if [[ ! -z \"$dups\" ]]; then\n  echo -e \"Duplicate " + column + "(s) found:\\n$dups\" 1>&2\n  exit 1\nfi"
-      else ""}
-      ~{if column != "call_rate" then
-        "tail -n+2 \"" + basename(tsv_file) + "\" | cut -f$col > \"" + column + ".lines\""
-      else
-        "max_call_rate=$(tail -n+2 \"" + basename(tsv_file) + "\" | sed 's/\\r$//' | cut -f$col | sort -g -T . | tail -n1)\n" +
-        "tail -n+2 \"" + basename(tsv_file) + "\" | sed 's/\\r$//' | cut -f$col | if [[ $max_call_rate > 1.0 ]]; then awk '{print $0/100}'; else cat; fi > \"" + column + ".lines\"\n"}
+      "  touch \"" + column + ".lines\"\n" +
+      "  echo \"true\""}
+    else
+    ~{if check_dups then
+      "  dups=$(tail -n+2 \"" + basename(tsv_file) + "\" | sed 's/\\r$//' | awk -F\"\\t\" -v col=\"$col\" '{print $col}' | sort | uniq --repeated)\n" +
+      "  if [[ ! -z \"$dups\" ]]; then\n  echo -e \"Duplicate " + column + "(s) found:\\n$dups\" 1>&2\n  exit 1\nfi"
+    else ""}
+    ~{if check_empty then
+      "  empty=$(tail -n+2 \"" + basename(tsv_file) + "\" | sed 's/\\r$//' | awk -F\"\\t\" -v col=\"$col\" '$col==\"\"')\n" +
+      "  if [[ ! -z \"$empty\" ]]; then\n  echo -e \"Empty " + column + "(s) found at line:\\n$empty\" 1>&2\n  exit 1\nfi"
+    else ""}
+    ~{if column != "call_rate" then
+      "  tail -n+2 \"" + basename(tsv_file) + "\" | sed 's/\\r$//' | awk -F\"\\t\" -v col=\"$col\" '{print $col}' > \"" + column + ".lines\""
+    else
+      "  max_call_rate=$(tail -n+2 \"" + basename(tsv_file) + "\" | sed 's/\\r$//' | awk -F\"\\t\" -v col=\"$col\" '{print $col}' | sort -g -T . | tail -n1)\n" +
+      "  tail -n+2 \"" + basename(tsv_file) + "\" | sed 's/\\r$//' | awk -F\"\\t\" -v col=\"$col\" '{print $col}' | if [[ $max_call_rate > 1.0 ]]; then awk '{print $0/100}'; else cat; fi > \"" + column + ".lines\"\n"}
       echo "false"
     fi
     rm "~{basename(tsv_file)}"
@@ -942,7 +954,7 @@ task get_reheader_maps {
   output {
     Directory maps = "maps"
     # cannot use suffix(batches, ".map") because of unresolved Cromwell bug
-    # https://github.com/broadinstitute/cromwell/issues/5549
+    # http://github.com/broadinstitute/cromwell/issues/5549
     Array[File] map_files = read_lines(stdout())
   }
 
@@ -1038,7 +1050,7 @@ task csv2bam {
   }
 }
 
-# https://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
+# http://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
 task idat2gtc {
   input {
     File bpm_file
@@ -1112,7 +1124,7 @@ task idat2gtc {
   }
 }
 
-# https://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
+# http://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
 task cel2affy {
   input {
     File? xml_file
@@ -1568,7 +1580,7 @@ task ref_scatter {
   }
 }
 
-# https://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
+# http://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
 task vcf_scatter {
   input {
     File vcf_file
@@ -1613,7 +1625,7 @@ task vcf_scatter {
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
       --scatter-file regions.lines \
       --prefix "~{filebase}."
-    cut -f2 regions.lines | sed 's/^/vcfs\/~{filebase}./;s/$/.bcf/'
+    awk -F"\t" '{print $2}' regions.lines | sed 's/^/vcfs\/~{filebase}./;s/$/.bcf/'
     rm "~{basename(vcf_file)}"
     rm "~{basename(intervals_tsv)}"
     rm regions.lines
@@ -1703,6 +1715,7 @@ task vcf_qc {
     Float dup_divergence_thr = 0.02
     Float genotype_exc_het_thr = 0.000001
     File? duplicate_samples_file
+    Boolean fix_ploidy = false
     File? extra_xcl_vcf_file
 
     String docker
@@ -1752,6 +1765,7 @@ task vcf_qc {
       --write 1 \
       "~{basename(vcf_file)}" \
       "~{filebase}.xcl.bcf" | \
+    ~{if fix_ploidy then "bcftools +fixploidy --no-version --output-type u -- --force-ploidy 2 | " else ""}\
     bcftools view --no-version --output "~{filebase}.qc.bcf" --output-type b --min-ac 0 --exclude-uncalled --write-index
     bcftools index --nrecords "~{filebase}.qc.bcf"
     ~{if defined(vcf_idx) then "" else "rm \"" + basename(vcf_file) + ".csi\""}
@@ -1778,8 +1792,8 @@ task vcf_qc {
   }
 }
 
-# hack https://github.com/samtools/bcftools/issues/1425 is employed in the end to fix the header
-# the command requires BCFtools 1.14 due to bug https://github.com/samtools/bcftools/issues/1497
+# hack http://github.com/samtools/bcftools/issues/1425 is employed in the end to fix the header
+# the command requires BCFtools 1.14 due to bug http://github.com/samtools/bcftools/issues/1497
 task vcf_shapeit5 {
   input {
     Int n_smpls
@@ -1890,7 +1904,7 @@ task vcf_shapeit5 {
   }
 }
 
-# https://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
+# http://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
 task vcf_split {
   input {
     File vcf_file
@@ -1920,7 +1934,7 @@ task vcf_split {
     mkdir mendel
     sed 's/ /\\ /g;s/\t/,/g;s/$/\t-/' "~{basename(sample_id_file)}" | paste -d $'\t' - $filebases > samples_file.txt
     bcftools +split --keep-tags FMT/GT --output-type b~{clevel} --output vcfs --samples-file samples_file.txt "~{basename(vcf_file)}"
-    cut -f1 $filebases | sed 's/^/vcfs\//;s/$/.bcf/'
+    awk -F"\t" '{print $1}' $filebases | sed 's/^/vcfs\//;s/$/.bcf/'
     rm "~{basename(vcf_file)}"
     rm "~{basename(sample_id_file)}"
     rm samples_file.txt
@@ -2124,8 +2138,8 @@ task vcf_import {
   }
 }
 
-# uses hack from https://github.com/samtools/bcftools/pull/1505
-# the command requires BCFtools 1.14 due to bug https://github.com/samtools/bcftools/issues/1418
+# uses hack from http://github.com/samtools/bcftools/pull/1505
+# the command requires BCFtools 1.14 due to bug http://github.com/samtools/bcftools/issues/1418
 task get_max_nrecords {
   input {
     File vcf_idx
@@ -2141,7 +2155,7 @@ task get_max_nrecords {
   command <<<
     set -euo pipefail
     mv "~{vcf_idx}" .
-    bcftools index --stats "~{basename(vcf_idx)}" | cut -f3 | sort -n -T . | tail -n1
+    bcftools index --stats "~{basename(vcf_idx)}" | awk -F"\t" '{print $3}' | sort -n -T . | tail -n1
     rm "~{basename(vcf_idx)}"
   >>>
 
@@ -2159,7 +2173,7 @@ task get_max_nrecords {
   }
 }
 
-# the command requires BCFtools 1.15 or newer due to bug https://github.com/samtools/htslib/issues/1362
+# the command requires BCFtools 1.15 or newer due to bug http://github.com/samtools/htslib/issues/1362
 task vcf_mocha {
   input {
     Int n_smpls
@@ -2176,6 +2190,7 @@ task vcf_mocha {
     String? kir_reg
     String? mocha_extra_args
     String ext_string
+    Boolean wgs = false
 
     String docker
     Int? cpu_override
@@ -2187,7 +2202,7 @@ task vcf_mocha {
 
   Float pvcf_size = size(pvcf_file, "GiB")
   Float xcl_size = size(xcl_vcf_file, "GiB")
-  Int disk_size = select_first([disk_size_override, ceil(10.0 + 2.0 * pvcf_size + xcl_size)])
+  Int disk_size = select_first([disk_size_override, ceil(10.0 + 2.5 * pvcf_size + xcl_size)])
   Float memory = select_first([memory_override, 3.5 + 18.0 * n_smpls * max_n_markers / 1024 / 1024 / 1024])
   Int cpu = select_first([cpu_override, if memory > 6.5 then 2 * ceil(memory / 13) else 1])
   String filebase = basename(basename(basename(basename(pvcf_file, ".bcf"), ".vcf.gz"), '.phased'), "." + ext_string)
@@ -2209,14 +2224,25 @@ task vcf_mocha {
       ~{if defined(mhc_reg) then "--mhc \"" + mhc_reg + "\"" else ""} \
       ~{if defined(kir_reg) then "--kir \"" + kir_reg + "\"" else ""} \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
-      --output "~{filebase}.~{ext_string}.bcf" \
-      --output-type b \
       --calls "~{filebase}.calls.tsv" \
-      --stats "~{filebase}.stats.tsv" \
       --ucsc-bed "~{filebase}.ucsc.bed" \
       "~{input_pvcf_file}" \
       ~{mocha_extra_args} \
+    ~{if wgs then "  --stats \"" + filebase + ".stats.tsv\"" else
+    "  --stats \"" + filebase + ".tmp.stats.tsv\" \\\n" +
+    "  --output - \\\n" +
+    "  --output-type u | \\\n" +
+    "bcftools +BAFregress \\\n" +
+    "  --estimates \"" + filebase + ".baf_reg.tsv\""} \
+      --output "~{filebase}.~{ext_string}.bcf" \
+      --output-type b \
       --write-index
+    ~{if wgs then "" else
+    "awk -F\"\\t\" 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}\n" +
+    "  {print $(f[\"baf_regress\"])}' \"" + filebase + ".baf_reg.tsv\" | \\\n" +
+    "  paste -d\"\\t\" \"" + filebase + ".tmp.stats.tsv\" - > \"" + filebase + ".stats.tsv\"\n" +
+    "rm \"~{filebase}.tmp.stats.tsv\"\n" +
+    "rm \"~{filebase}.baf_reg.tsv\""}
     rm "~{input_pvcf_file}"
     rm "~{input_pvcf_idx}"
     echo "~{sep("\n", select_all([rules_file, sample_tsv_file, xcl_vcf_file, xcl_vcf_idx, cnp_file]))}" | \
@@ -2241,7 +2267,7 @@ task vcf_mocha {
   }
 }
 
-# https://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
+# http://support.terra.bio/hc/en-us/community/posts/360071476431-Terra-fails-to-delocalize-files-listed-through-read-lines-
 task mocha_plot {
   input {
     File vcf_file

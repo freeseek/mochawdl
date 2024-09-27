@@ -22,12 +22,12 @@ While most biobanks based on Affymetrix Axiom DNA microarrays, such as the FINNG
 ###.AxiomGT1.confidences.txt
 ###.AxiomGT1.summary.txt
 ```
-the UK biobank delivers genotypes and intensities (see [here](https://biobank.ctsu.ox.ac.uk/crystal/label.cgi?id=263)) in non-standard file formats merged across all batches (see [here](https://biobank.ctsu.ox.ac.uk/crystal/refer.cgi?id=531)). We advise to avoid using the provided intensity values in the `ukb_l2r_chrN_v2.txt` and `ukb_baf_chrN_v2.txt` files as a significant amount of these are set to missing for unclear reasons. Furthermore, while the two Affymetrix arrays used to genotype UK biobank participants contain probesets for two recurrently somatic variants
+the UK biobank delivers genotypes and intensities (see [here](http://biobank.ctsu.ox.ac.uk/crystal/label.cgi?id=263)) in non-standard file formats merged across all batches (see [here](http://biobank.ctsu.ox.ac.uk/crystal/refer.cgi?id=531)). We advise to avoid using the provided intensity values in the `ukb_l2r_chrN_v2.txt` and `ukb_baf_chrN_v2.txt` files as a significant amount of these are set to missing for unclear reasons. Furthermore, while the two Affymetrix arrays used to genotype UK biobank participants contain probesets for two recurrently somatic variants
 ```
 AX-83208650 Affx-37797994 rs77375493 JAK2 V617F
 AX-86708948 Affx-80252081 rs121913502 IDH2 R140Q
 ```
-the JAK2 V617F marker is not present in the output files as it was removed during quality control and so the intensities from the probeset have not been made available to researchers. A [study](http://doi.org/10.1182/blood-2015-06-652941) has shown intensities from this probeset to be a proxy for JAK2 V617F carriers. The intensities for this probeset are instead available in the [FINNGEN](https://twitter.com/SbotGwa/status/1520749066942132226) and MVP biobanks
+the JAK2 V617F marker is not present in the output files as it was removed during quality control and so the intensities from the probeset have not been made available to researchers. A [study](http://doi.org/10.1182/blood-2015-06-652941) has shown intensities from this probeset to be a proxy for JAK2 V617F carriers. The intensities for this probeset are instead available in the [FINNGEN](http://twitter.com/SbotGwa/status/1520749066942132226) and MVP biobanks
 
 Finally, the provided PLINK files are encoded in such a way that the A1 and A2 alleles are, respectively, the reference and alternate alleles with respect to the GRCh37 human genome reference (unless neither of the two alleles matches the reference allele) rather than being the A and B alleles with respect to the Affymetrix probesets design. As MoChA requires knowledge of which allele is the B allele to interpret the B-allele frequency correctly, we need to recover the B-allele designation from the Affymetrix array manifest files
 
@@ -43,14 +43,14 @@ If you want to run this conversion through Cromwell, you can skip the sections b
 ```
 Where `sqc_path`, `cal_path`, and `int_path` are, respectively, the paths where the private resources `ukb_sqc_v2.txt`, `ukb_cal_chr{{1..22},X,Y,XY,MT}_v2.bed`, and `ukb_int_chr{{1..22},X,Y,XY,MT}_v2.bin` are localized
 
-To minimize network operations between storage nodes and compute nodes, chromosome and batch files for genotypes and intensities are processed on separate nodes, with the intensity file for chromosome 1 being the largest file localized to a single node (231 GiB). We advise to make sure you run the computation in the same computing location where the anonymized data files are stored to optimize latency and network bandwidth and avoid [egress costs](https://cloud.google.com/storage/pricing), as genotype and intensity files comprise 3.0 TiB of data. If this recommendation is followed, then running this conversion pipeline should take approximately half a day and cost $5-10 (mostly due to gzip compression). The output will consist of 2.4 TiB of gzip-compressed files split by batches
+To minimize network operations between storage nodes and compute nodes, chromosome and batch files for genotypes and intensities are processed on separate nodes, with the intensity file for chromosome 1 being the largest file localized to a single node (231 GiB). We advise to make sure you run the computation in the same computing location where the anonymized data files are stored to optimize latency and network bandwidth and avoid [egress costs](http://cloud.google.com/storage/pricing), as genotype and intensity files comprise 3.0 TiB of data. If this recommendation is followed, then running this conversion pipeline should take approximately half a day and cost $5-10 (mostly due to gzip compression). The output will consist of 2.4 TiB of gzip-compressed files split by batches
 
 Download Resources
 ==================
 
-A compute node with 7 TiB of free disk space would be able to download and process the UK biobank intensity files following the steps described below. However, if you are planning to use a cloud virtual machine, do notice that [disk storage costs](https://cloud.google.com/compute/disks-image-pricing#disk) are higher than [bucket storage costs](https://cloud.google.com/storage/pricing). If you have access to the genotype intensity binary files in the cloud, you could request a virtual machine in the same cloud location as this can significantly speed the time needed to copy the intensity files into the node
+A compute node with 7 TiB of free disk space would be able to download and process the UK biobank intensity files following the steps described below. However, if you are planning to use a cloud virtual machine, do notice that [disk storage costs](http://cloud.google.com/compute/disks-image-pricing#disk) are higher than [bucket storage costs](http://cloud.google.com/storage/pricing). If you have access to the genotype intensity binary files in the cloud, you could request a virtual machine in the same cloud location as this can significantly speed the time needed to copy the intensity files into the node
 
-You will first need the following anonymized but private resources (see [here](https://biobank.ctsu.ox.ac.uk/crystal/refer.cgi?id=668) for instructions on how to get these files)
+You will first need the following anonymized but private resources (see [here](http://biobank.ctsu.ox.ac.uk/crystal/refer.cgi?id=668) for instructions on how to get these files)
 ```
 ukb_sqc_v2.txt # 252 MiB
 ukb_cal_chr{{1..22},X,Y,XY,MT}_v2.bed # 92 GiB
@@ -327,3 +327,4 @@ If you only want to analyzed individuals of white British ancestry, you can gene
 ```
 awk '$24 {print $1}' ukb_sqc_v2.txt > ukb.eur.lines
 ```
+This will generate a subset of individual for which the `in.white.British.ancestry.subset` variable [here](http://biobank.ctsu.ox.ac.uk/crystal/refer.cgi?id=531) is set to 1
