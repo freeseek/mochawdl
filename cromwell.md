@@ -276,17 +276,18 @@ if [ -f /usr/bin/docker ]; then
   echo "file /usr/bin/docker already exists" >&2
 else
   (printf "#"\!"/bin/bash\n";
-  docker pull debian:stable-slim
+  docker pull debian:stable-slim 1>&2
   sha256=$(docker inspect --format='{{index .RepoDigests 0}}' debian:stable-slim | cut -d: -f2)
   printf "printf \"debian\\\tstable-slim\\\tsha256:$sha256\\\n\"\n"
-  docker pull amancevice/pandas:slim
+  docker pull amancevice/pandas:slim 1>&2
   sha256=$(docker inspect --format='{{index .RepoDigests 0}}' amancevice/pandas:slim | cut -d: -f2)
   printf "printf \"amancevice/pandas\\\tslim\\\tsha256:$sha256\\\n\"\n"
   for docker in {bcftools,apt,r_mocha,shapeit5,impute5,beagle5,regenie}; do
-    docker pull $DOCKER_REPOSITORY/$docker:$DOCKER_TAG
+    docker pull $DOCKER_REPOSITORY/$docker:$DOCKER_TAG 1>&2
     sha256=$(docker inspect --format='{{index .RepoDigests 0}}' $DOCKER_REPOSITORY/$docker:$DOCKER_TAG | cut -d: -f2)
     printf "printf \"$DOCKER_REPOSITORY/$docker\\\t$DOCKER_TAG\\\tsha256:$sha256\\\n\"\n"
   done) | sudo tee /usr/bin/docker
+  sudo chmod a+x /usr/bin/docker
 fi
 ```
 This will allow you to control the hash lookups that Cromwell uses to verify what container images are being run 
