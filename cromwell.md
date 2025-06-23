@@ -248,13 +248,48 @@ mkdir -p $CACHE_DIR
 DOCKER_REPOSITORY=us.gcr.io/mccarroll-mocha
 DOCKER_TAG=1.20-20240927
 for docker in debian:stable-slim amancevice/pandas:slim \
-  DOCKER_REPOSITORY/{bcftools,apt,r_mocha,shapeit4,shapeit5,impute5,beagle5,regenie}:$DOCKER_TAG; do
+  $DOCKER_REPOSITORY/{bcftools,apt,r_mocha,shapeit5,impute5,beagle5,regenie}:$DOCKER_TAG; do
   DOCKER_NAME=$(sed -e 's/[^A-Za-z0-9._-]/_/g' <<< ${docker})
   IMAGE=$CACHE_DIR/$DOCKER_NAME.sif
   singularity pull $IMAGE docker://${docker}
 done
 ```
 You will then have to move manually these images from `$CACHE_DIR` to a location accessible to the nodes that will run the computational tasks. This additional step is only recommended in the rare scenario of no available internet connection available for Cromwell
+
+Furthermore, Cromwell will use `docker` to check the sha256 of each image to see if it matches the sha256 of images used to run tasks in the past, for the purpose of verifying if a given task was already run previously using the CallCaching framework. When Cromwell is set up to perform the sha256 digest lookup locally with the following stanza in the configuration file:
+```
+docker {
+  hash-lookup {
+    method = "local"
+  }
+}
+```
+it will perform the lookup by running the following command:
+```
+docker images --digests --format '{{printf "%s\t%s\t%s" .Repository .Tag .Digest}}'
+```
+as explained [here](http://github.com/broadinstitute/cromwell/blob/master/dockerHashing/src/main/scala/cromwell/docker/local/DockerCliClient.scala). If you don't have a `docker` executable installed or if you don't have internet access on the machine where you are running Cromwell, you can imitate the required output from the command above using a substitute docker executable as follows:
+```
+DOCKER_REPOSITORY=us.gcr.io/mccarroll-mocha
+DOCKER_TAG=1.20-20240927
+if [ -f /usr/bin/docker ]; then
+  echo "file /usr/bin/docker already exists" >&2
+else
+  (printf "#"\!"/bin/bash\n";
+  docker pull debian:stable-slim
+  sha256=$(docker inspect --format='{{index .RepoDigests 0}}' debian:stable-slim | cut -d: -f2)
+  printf "printf \"debian\\\tstable-slim\\\tsha256:$sha256\\\n\"\n"
+  docker pull amancevice/pandas:slim
+  sha256=$(docker inspect --format='{{index .RepoDigests 0}}' amancevice/pandas:slim | cut -d: -f2)
+  printf "printf \"amancevice/pandas\\\tslim\\\tsha256:$sha256\\\n\"\n"
+  for docker in {bcftools,apt,r_mocha,shapeit5,impute5,beagle5,regenie}; do
+    docker pull $DOCKER_REPOSITORY/$docker:$DOCKER_TAG
+    sha256=$(docker inspect --format='{{index .RepoDigests 0}}' $DOCKER_REPOSITORY/$docker:$DOCKER_TAG | cut -d: -f2)
+    printf "printf \"$DOCKER_REPOSITORY/$docker\\\t$DOCKER_TAG\\\tsha256:$sha256\\\n\"\n"
+  done) | sudo tee /usr/bin/docker
+fi
+```
+This will allow you to control the hash lookups that Cromwell uses to verify what container images are being run 
 
 Docker
 ------
@@ -269,6 +304,17 @@ It is also possible to install docker without root privileges, though this is on
 $ curl -fsSL http://get.docker.com/rootless | sh
 $ systemctl --user start docker
 $ export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
+```
+
+If you are running Cromwell in a computational environment that does not have internet access, you might have to download the images manually. You can do so with the following command on a node that has internet access:
+
+```
+DOCKER_REPOSITORY=us.gcr.io/mccarroll-mocha
+DOCKER_TAG=1.20-20240927
+for docker in debian:stable-slim amancevice/pandas:slim \
+  $DOCKER_REPOSITORY/{bcftools,apt,r_mocha,shapeit5,impute5,beagle5,regenie}:$DOCKER_TAG; do
+  docker pull ${docker}
+done
 ```
 
 Configure Cromwell
@@ -372,6 +418,21 @@ backend {
         """
 
         script-epilogue = "sleep 5 && sync"
+
+        submit = """
+        # Submit the script to SLURM
+        sbatch \
+          --wait \
+          -J=${job_name} \
+          -D ${cwd} \
+          -o ${out}.sbatch \
+          -e ${err}.sbatch \
+          -t ${runtime_minutes} \
+          -c ${cpu} \
+          --mem=${memory_mb} \
+          --wrap "/usr/bin/env bash ${script}"
+        """
+
         submit-docker = """
         # Make sure the SINGULARITY_CACHEDIR variable is set. If not use a default
         # based on the users home.
@@ -520,6 +581,15 @@ database {
 call-caching {
   enabled = true
   invalidate-bad-cache-results = true
+}
+```
+
+If you are running Cromwell in a computational environment that does not have internet access and you want to have CallCaching working you have to instruct Cromwell to retrieve the container digests using a local lookup with a local docker daemon (as explained [here](http://cromwell.readthedocs.io/en/latest/tutorials/Containers/#docker-config-block)):
+```
+docker {
+  hash-lookup {
+    method = "local"
+  }
 }
 ```
 
