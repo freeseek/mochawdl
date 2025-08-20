@@ -1712,6 +1712,7 @@ task assoc_plot {
       ~{if defined(min_af) then "--min-af " + select_first([min_af]) else ""} \
       --tbx "~{basename(assoc_file)}" \
       --png "~{filebase}.png"
+    if [ ! -f "~{filebase}.png" ]; then touch "~{filebase}.png"; fi
     rm "~{basename(assoc_file)}"
     ~{if defined(cyto_file) then "rm \"" + basename(select_first([cyto_file])) + "\"" else ""}
   >>>
