@@ -2221,7 +2221,7 @@ task vcf_mocha {
     set -euo pipefail
     mv "~{pvcf_file}" ~{if basename(pvcf_file) != input_pvcf_file then "\"" + input_pvcf_file + "\"" else "."}
     mv "~{pvcf_idx}" ~{if basename(pvcf_file) != input_pvcf_file then "\"" + input_pvcf_idx + "\"" else "."}
-    echo "~{sep("\n", select_all([rules_file, sample_tsv_file, xcl_vcf_file, xcl_vcf_idx, cnp_file]))}" | \
+    echo "~{sep("\n", select_all([rules_file, sample_tsv_file, xcl_vcf_file, xcl_vcf_idx, cnp_file, fra_file]))}" | \
       tr '\n' '\0' | xargs -0 mv -t .
     bcftools +mocha \
       --genome~{if defined(rules_file) then "-file \"" + basename(select_first([rules_file])) else " \"" + assembly}" \
@@ -2254,7 +2254,7 @@ task vcf_mocha {
     "rm \"~{filebase}.baf_reg.tsv\""}
     rm "~{input_pvcf_file}"
     rm "~{input_pvcf_idx}"
-    echo "~{sep("\n", select_all([rules_file, sample_tsv_file, xcl_vcf_file, xcl_vcf_idx, cnp_file]))}" | \
+    echo "~{sep("\n", select_all([rules_file, sample_tsv_file, xcl_vcf_file, xcl_vcf_idx, cnp_file, fra_file]))}" | \
       sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm
   >>>
 
