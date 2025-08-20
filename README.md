@@ -427,7 +427,7 @@ The following example consists of [270 HapMap samples](http://doi.org/10.1038/ng
 
 Download manifest data:
 ```
-wget http://www.affymetrix.com/Auth/support/downloads/library_files/genomewidesnp6_libraryfile.zip
+wget http://tools.thermofisher.com/content/sfs/supportfiles/genomewidesnp6_libraryfile.zip
 wget http://www.affymetrix.com/Auth/analysis/downloads/lf/genotyping/GenomeWideSNP_6/SNP6_supplemental_axiom_analysis_files.zip
 wget http://www.affymetrix.com/Auth/analysis/downloads/na35/genotyping/GenomeWideSNP_6.na35.annot.csv.zip
 unzip -oj genomewidesnp6_libraryfile.zip CD_GenomeWideSNP_6_rev3/Full/GenomeWideSNP_6/LibFiles/GenomeWideSNP_6.{cdf,chrXprobes,chrYprobes,specialSNPs}
@@ -1011,18 +1011,18 @@ RUN apt-get -qqy update --fix-missing && \
                  tabix \
                  samtools \
                  bcftools && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.20-20240927_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.20-20240927_amd64.deb && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/mocha/bio-mocha_1.20-20240927_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./bio-mocha_1.20-20240927_amd64.deb && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.20-20240927_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./score_1.20-20240927_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.22-20250819_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.22-20250819_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/mocha/bio-mocha_1.22-20250819_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./bio-mocha_1.22-20250819_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.22-20250819_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./score_1.22-20250819_amd64.deb && \
     apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
                  wget && \
     apt-get -qqy clean && \
-    rm -rf gtc2vcf_1.20-20240927_amd64.deb \
-           bio-mocha_1.20-20240927_amd64.deb \
-           score_1.20-20240927_amd64.deb \
+    rm -rf gtc2vcf_1.22-20250819_amd64.deb \
+           bio-mocha_1.22-20250819_amd64.deb \
+           score_1.22-20250819_amd64.deb \
            /var/lib/apt/lists/*
 ```
 
@@ -1035,15 +1035,15 @@ RUN apt-get -qqy update --fix-missing && \
                  wget \
                  bcftools \
                  unzip && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.20-20240927_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.20-20240927_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/gtc2vcf/gtc2vcf_1.22-20250819_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./gtc2vcf_1.22-20250819_amd64.deb && \
     wget --no-check-certificate http://downloads.thermofisher.com/APT/APT_2.12.0/apt_2.12.0_linux_64_x86_binaries.zip && \
     unzip -ojd /usr/local/bin apt_2.12.0_linux_64_x86_binaries.zip bin/apt-probeset-genotype && \
     chmod a+x /usr/local/bin/apt-probeset-genotype && \
     apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
                  wget && \
     apt-get -qqy clean && \
-    rm -rf gtc2vcf_1.20-20240927_amd64.deb \
+    rm -rf gtc2vcf_1.22-20250819_amd64.deb \
            apt_2.12.0_linux_64_x86_binaries.zip \
            /var/lib/apt/lists/*
 ```
@@ -1061,15 +1061,15 @@ RUN apt-get -qqy update --fix-missing && \
                  r-cran-ggplot2 \
                  r-cran-data.table \
                  r-cran-reshape2 && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/mocha/bio-mocha_1.20-20240927_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./bio-mocha_1.20-20240927_amd64.deb && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.20-20240927_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./score_1.20-20240927_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/mocha/bio-mocha_1.22-20250819_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./bio-mocha_1.22-20250819_amd64.deb && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.22-20250819_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./score_1.22-20250819_amd64.deb && \
     apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
                  wget && \
     apt-get -qqy clean && \
-    rm -rf bio-mocha_1.20-20240927_amd64.deb \
-           score_1.20-20240927_amd64.deb \
+    rm -rf bio-mocha_1.22-20250819_amd64.deb \
+           score_1.22-20250819_amd64.deb \
            /var/lib/apt/lists/*
 ```
 
@@ -1136,23 +1136,24 @@ RUN apt-get -qqy update --fix-missing && \
     apt-get -qqy install --no-install-recommends \
                  wget \
                  unzip \
+		 libcurl4t64 \
                  libgomp1 \
                  tabix \
                  bcftools \
                  plink1.9 \
                  plink2 && \
-    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.20-20240927_amd64.deb && \
-    apt-get -qqy install --no-install-recommends -f ./score_1.20-20240927_amd64.deb && \
-    wget --no-check-certificate http://github.com/rgcgithub/regenie/releases/download/v3.8/regenie_v3.6.gz_x86_64_Linux_mkl.zip && \
-    unzip -d /usr/local/bin regenie_v3.6.gz_x86_64_Linux_mkl.zip && \
-    chmod a+x /usr/local/bin/regenie_v3.6.gz_x86_64_Linux_mkl && \
-    ln -s regenie_v3.6.gz_x86_64_Linux_mkl /usr/local/bin/regenie && \
+    wget --no-check-certificate http://software.broadinstitute.org/software/score/score_1.22-20250819_amd64.deb && \
+    apt-get -qqy install --no-install-recommends -f ./score_1.22-20250819_amd64.deb && \
+    wget --no-check-certificate https://github.com/rgcgithub/regenie/releases/download/v4.0/regenie_v4.0.gz_x86_64_Linux_mkl.zip && \
+    unzip -d /usr/local/bin regenie_v4.0.gz_x86_64_Linux_mkl.zip && \
+    chmod a+x /usr/local/bin/regenie_v4.0.gz_x86_64_Linux_mkl && \
+    ln -s regenie_v4.0.gz_x86_64_Linux_mkl /usr/local/bin/regenie && \
     apt-get -qqy purge --auto-remove --option APT::AutoRemove::RecommendsImportant=false \
                  wget \
                  unzip && \
     apt-get -qqy clean && \
-    rm -rf score_1.20-20240927_amd64.deb \
-           regenie_v3.6.gz_x86_64_Linux_mkl.zip \
+    rm -rf score_1.22-20250819_amd64.deb \
+           regenie_v4.0.gz_x86_64_Linux_mkl.zip \
            /var/lib/apt/lists/*
 ```
 

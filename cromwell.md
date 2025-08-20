@@ -69,17 +69,18 @@ $ gcloud init
 $ gcloud iam service-accounts keys create {google-project}.key.json --iam-account={google-number}-compute@developer.gserviceaccount.com
 ```
 or from the [Service accounts](http://console.cloud.google.com/iam-admin/serviceaccounts) page by selecting the `{google-project}` first and then the `{google-number}-compute@developer.gserviceaccount.com` service account
-* Enable the Cloud Life Sciences API for your Google project from the Google [console](http://console.developers.google.com/apis/library/lifesciences.googleapis.com)
+* Enable the Batch API for your Google project from the Google [console](https://console.cloud.google.com/apis/library/batch.googleapis.com)
+* Enable the Cloud Logging API for your Google project from the Google [console](https://console.cloud.google.com/apis/library/logging.googleapis.com)
 * Enable the Compute Engine API for your Google project from the Google [console](http://console.cloud.google.com/apis/library/compute.googleapis.com)
 * Enable the Google Cloud Storage JSON API for your Google project from the Google [console](http://console.cloud.google.com/apis/library/storage-api.googleapis.com)
 ```
-$ for api in lifesciences compute storage-api; do
-  gcloud services enable $api.googleapis.com
+$ for api in batch logging compute storage-api; do
+  gcloud services enable $api.googleapis.com --project={google-project}
 done
 ```
-* You need the following roles available to your service account: `Cloud Life Sciences Workflows Runner`, `Service Account User`, `Storage Object Admin`. To add these roles you need to have been assigned the rights to change roles you can use the following commands (or manually from the [IAM](http://console.cloud.google.com/iam-admin/iam) page):
+* You need the following roles available to your service account: ` Batch Agent Reporter`, `Batch Job Editor`, `Service Account User`, `Service Usage Consumer`, `Storage Object Admin`. The Cromwell documentation explains this [here](http://cromwell.readthedocs.io/en/stable/tutorials/PipelinesApi101) but it was not updated when Google Cloud switched from the Life Sciences API to the Batch API on July 8th, 2025. To add these roles you need to have been assigned the rights to change roles you can use the following commands (or manually from the [IAM](http://console.cloud.google.com/iam-admin/iam) page):
 ```
-$ for role in lifesciences.workflowsRunner iam.serviceAccountUser storage.objectAdmin; do
+$ for role in batch.agentReporter batch.jobsEditor iam.serviceAccountUser serviceusage.serviceUsageConsumer storage.objectAdmin; do
   gcloud projects add-iam-policy-binding {google-project} --member serviceAccount:{google-number}-compute@developer.gserviceaccount.com --role roles/$role
 done
 ```
@@ -246,7 +247,7 @@ if [ -z $SINGULARITY_CACHEDIR ];
 fi
 mkdir -p $CACHE_DIR
 DOCKER_REPOSITORY=us.gcr.io/mccarroll-mocha
-DOCKER_TAG=1.20-20240927
+DOCKER_TAG=1.22-20250819
 for docker in debian:stable-slim amancevice/pandas:slim \
   $DOCKER_REPOSITORY/{bcftools,apt,r_mocha,shapeit5,impute5,beagle5,regenie}:$DOCKER_TAG; do
   DOCKER_NAME=$(sed -e 's/[^A-Za-z0-9._-]/_/g' <<< ${docker})
@@ -489,10 +490,12 @@ By setting the [exit-code-timeout-seconds](http://cromwell.readthedocs.io/en/sta
 Google Cloud Backend
 --------------------
 
-* Download the [PAPIv2](http://github.com/broadinstitute/cromwell/blob/develop/cromwell.example.backends/PAPIv2.conf) configuration file with the following command:
+* Download the [GCPBATCH](http://github.com/broadinstitute/cromwell/blob/develop/cromwell.example.backends/GCPBATCH.conf) configuration file with the following command:
 ```
-$ wget -O cromwell.conf http://raw.githubusercontent.com/broadinstitute/cromwell/develop/cromwell.example.backends/PAPIv2.conf
+$ wget -O cromwell.conf http://raw.githubusercontent.com/broadinstitute/cromwell/develop/cromwell.example.backends/GCPBATCH.conf
 ```
+and add the option `logs-policy = "PATH"` within the `batch` stanza. The Cromwell documentation [here](http://cromwell.readthedocs.io/en/latest/tutorials/GcpBatch101) is incorrect as it still uses a `genomics` stanza from the Life Sciences API configuration where a `batch` stanza should be used as required by the Batch API configuration
+
 * This basic configuration file contains only the **backend** configuration stanza. To configure your Cromwell server you have to edit additional configuration stanzas before the **backend** one
 
 * Add the **google** configuration stanza to the `cromwell.conf` configuration file (leave `service-account` and `service_account` verbatim):
@@ -624,6 +627,12 @@ $ java -jar cromwell-XY.jar run hello.wdl
   "myWorkflow.myTask.out": "hello world"
 }
 ```
+* If you are running Cromwell with the Google Cloud Batch API as the backend, you need to make sure to set the credential: 
+```
+export GOOGLE_APPLICATION_CREDENTIALS={google-project}.key.json
+```
+Where `{google-project}.key.json` should be the same file used in the Cromwell configuration file for variable `google.auths.json-file`
+
 * Once we know that Cromwell can run a basic workflow, start Cromwell as a server on the node running the mySQL server with the following command:
 ```
 $ (java -XX:MaxRAMPercentage=90 -Dconfig.file=cromwell.conf -jar cromwell-XY.jar server &)
@@ -729,6 +738,7 @@ $ sudo ls -l /var/lib/mysql/cromwell
 $ killall java # to stop the Cromwell server
 $ sudo mysql --user=root --password=cromwell --execute "DROP DATABASE cromwell"
 $ sudo mysql --user=root --password=cromwell --execute "CREATE DATABASE cromwell"
+$ export GOOGLE_APPLICATION_CREDENTIALS={google-project}.key.json # if running with the Google Cloud Batch API backend
 $ (java -XX:MaxRAMPercentage=90 -Dconfig.file=cromwell.conf -jar cromwell-XY.jar server &)
 ```
 * If you want to clean temporary files and log files, after you have properly moved all the output files you need, you can delete the workflow executions directory defined as `root` in the `cromwell.conf` configuration file. Remember that failure to do proper cleanup could cause you to incur unexpected storage costs. After making sure there are no active jobs running with the Cromwell server, you can remove the executions and logs directory with the following command:
@@ -856,8 +866,10 @@ These are some of the messages that you might receive when something goes wrong:
 * If you are running with your own Cromwell server using the PAPIv2 API and some of your tasks start running but they then fail with and you have the error `Error attempting to Execute cromwell.backend.google.pipelines.common.api.PipelinesApiRequestManager$UserPAPIApiException: Unable to complete PAPI request due to a problem with the request (Error: checking service account permission: caller does not have access to act as the specified service account: "MY_NUMBER-compute@developer.gserviceaccount.com").` in the workflow log, then the cause is the service account not having the [Service Account User](http://cloud.google.com/iam/docs/service-accounts#user-role) (`roles/iam.serviceAccountUser`) role set
 * If you are running with your own Cromwell server using the PAPIv2 API and all of your tasks start running but they all fail with a log file including just the line `yyyy/mm/dd hh:mm:ss Starting container setup.` the cause is the service account not having the [Storage Object](http://cloud.google.com/storage/docs/access-control/iam-roles) Admin (`storage.objectAdmin`) role set
 * When running the phasing step on a very large cohort, we have noticed that tasks including the MHC can run very slowly. This is due to the very special nature of the MHC and there is currently no solution. Currently these tasks might dominate the speed of the whole pipeline
+* `Unable to complete Batch request due to a problem with the request (io.grpc.StatusRuntimeException: PERMISSION_DENIED: Request had insufficient authentication scopes.).` might mean that are running Cromwell with the Google Batch API and you did not specify the environmental variable GOOGLE_APPLICATION_CREDENTIALS which should point to the service account credentials .json file 
+* If a task failed with error message `Task xxx.xxx:xxx:1 failed. The job was stopped before the command finished. GCP Batch task exited with VMRecreatedDuringExecution(50006).` then this is a GCP Batch error and you should just rerun the pipeline making sure to recover the alreay run tasks through CallCaching 
 
 Acknowledgements
 ================
 
-This work is supported by NIH grant [R01 HG006855](http://grantome.com/grant/NIH/R01-HG006855), NIH grant [R01 MH104964](http://grantome.com/grant/NIH/R01-MH104964), NIH grant [R01MH123451](http://grantome.com/grant/NIH/R01-MH123451), and the Stanley Center for Psychiatric Research
+This work is supported by NIH grant [R01 HG006855](http://grantome.com/grant/NIH/R01-HG006855), NIH grant [R01 MH104964](http://grantome.com/grant/NIH/R01-MH104964), NIH grant [R01MH123451](http://grantome.com/grant/NIH/R01-MH123451), and the Stanley Center for Psychiatric Research. Special thanks to Khalid Shakir for help with the configuration of Cromwell with Google Cloud Batch

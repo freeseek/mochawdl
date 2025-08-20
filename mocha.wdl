@@ -1,15 +1,15 @@
 version development
 
-## Copyright (c) 2020-2024 Giulio Genovese
+## Copyright (c) 2020-2025 Giulio Genovese
 ##
-## Version 2024-09-27
+## Version 2025-08-19
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs MoChA on a cohort of samples genotyped with either Illumina or Affymetrix DNA microarrays
 ##
 ## Cromwell version support
-## - Successfully tested on v87
+## - Successfully tested on v90
 ##
 ## Distributed under terms of the MIT License
 
@@ -22,8 +22,9 @@ struct Reference {
   String? kir_reg
   String? nonpar_reg
   File? dup_file
-  File genetic_map_file
+  File? genetic_map_file
   File? cnp_file
+  File? fra_file
   File cyto_file
   String? panel_pfx
   String? panel_sfx
@@ -61,6 +62,7 @@ workflow mocha {
     String? dup_file
     String? genetic_map_file
     String? cnp_file
+    String? fra_file
     String? cyto_file
     String? panel_pfx
     String? panel_sfx
@@ -81,10 +83,10 @@ workflow mocha {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.20-20240927"
-    String apt_docker = "apt:1.20-20240927"
-    String shapeit5_docker = "shapeit5:1.20-20240927"
-    String r_mocha_docker = "r_mocha:1.20-20240927"
+    String bcftools_docker = "bcftools:1.22-20250819"
+    String apt_docker = "apt:1.22-20250819"
+    String shapeit5_docker = "shapeit5:1.22-20250819"
+    String r_mocha_docker = "r_mocha:1.22-20250819"
     Boolean? table_output
     Boolean do_not_use_reference = false
     Boolean use_shapeit5_ligate = false
@@ -110,6 +112,7 @@ workflow mocha {
     dup_file: if defined(dup_file) then ref_path_with_sep + select_first([dup_file]) else if ref_name == "GRCh38" || ref_name == "GRCh37" then ref_path_with_sep + "segdups.bed.gz" else None,
     genetic_map_file: if defined(genetic_map_file) then ref_path_with_sep + select_first([genetic_map_file]) else if ref_name == "GRCh38" then ref_path_with_sep + "genetic_map_hg38_withX.txt.gz" else if ref_name == "GRCh37" then ref_path_with_sep + "genetic_map_hg19_withX.txt.gz" else None,
     cnp_file: if defined(cnp_file) then ref_path_with_sep + select_first([cnp_file]) else if ref_name == "GRCh38" || ref_name == "GRCh37" then ref_path_with_sep + "cnps.bed" else None,
+    fra_file: if defined(fra_file) then ref_path_with_sep + select_first([fra_file]) else None,
     cyto_file: if defined(cyto_file) then ref_path_with_sep + select_first([cyto_file]) else if ref_name == "GRCh38" || ref_name == "GRCh37" then ref_path_with_sep + "cytoBand.txt.gz" else None,
     panel_pfx: if defined(panel_pfx) then ref_path_with_sep + select_first([panel_pfx]) else if ref_name == "GRCh38" then ref_path_with_sep + "1kGP_high_coverage_Illumina." else if ref_name == "GRCh37" then ref_path_with_sep + "ALL.chr" else None,
     panel_sfx: if defined(panel_sfx) then select_first([panel_sfx]) else if ref_name == "GRCh38" then ".bcf" else if ref_name == "GRCh37" then ".phase3_integrated.20130502.genotypes.bcf" else None,
@@ -161,7 +164,7 @@ workflow mocha {
   Array[Array[String]] ref_fasta_fai_tbl = transpose(read_tsv(ref.fasta + ".fai"))
   scatter (idx in range(length(ref_fasta_fai_tbl[0]))) {
     Int fai_len = ref_fasta_fai_tbl[1][idx]
-    if (fai_len > ref.min_chr_len && ref_fasta_fai_tbl[0][idx] != "Y" && ref_fasta_fai_tbl[0][idx] != "chrY") {
+    if (fai_len > ref.min_chr_len && ref_fasta_fai_tbl[0][idx] != "Y" && sub(ref_fasta_fai_tbl[0][idx], "^chrY", "") == ref_fasta_fai_tbl[0][idx]) {
       String chrs = ref_fasta_fai_tbl[0][idx]
       Int lens = fai_len
     }
@@ -441,7 +444,7 @@ workflow mocha {
           unphased_vcf_file = vcf_qc.qc_vcf_file,
           unphased_vcf_idx = vcf_qc.qc_vcf_idx,
           genetic_map_file = ref.genetic_map_file,
-          n_chrs = length(select_all(chrs)),
+          n_x_chr = length(select_all(chrs)),
           pedigree_file = pedigree_file,
           sample_tsv_file = if defined(ref.nonpar_reg) && intervals_tbl[0][idx] == select_first([nonpar_chr]) && beg >= select_first([nonpar_beg]) && end <= select_first([nonpar_end]) then select_first([sample_tsv.file, sample_tsv_file]) else None,
           n_panel_smpls = if use_reference then ref.n_panel_smpls else None,
@@ -509,6 +512,7 @@ workflow mocha {
           xcl_vcf_file = if mode == "pvcf" then data_paths_with_sep[idx] + batch_tbl["xcl_vcf"][idx] else vcf_concat.vcf_file,
           xcl_vcf_idx = if mode == "pvcf" then data_paths_with_sep[idx] + batch_tbl["xcl_vcf_index"][idx] else vcf_concat.vcf_idx,
           cnp_file = ref.cnp_file,
+          fra_file = ref.fra_file,
           mhc_reg = ref.mhc_reg,
           kir_reg = ref.kir_reg,
           mocha_extra_args = mocha_extra_args,
@@ -1159,12 +1163,12 @@ task cel2affy {
   Float xml_size = size(xml_file, "GiB")
   Float zip_size = size(zip_file, "GiB")
   Float cel_size = length(cel_files) * size(cel_files[0], "GiB")
-  Int disk_size = select_first([disk_size_override, ceil(10.0 + xml_size + zip_size + (if table_output then 8.0 else 6.0) * cel_size)])
+  Int disk_size = select_first([disk_size_override, ceil(10.0 + xml_size + zip_size + (if table_output then 8.5 else 6.5) * cel_size)])
   Float memory = select_first([memory_override, 2 * 7.25])
   Int cpu = select_first([cpu_override, if memory > 6.5 then 2 * ceil(memory / 13) else 1])
 
   String? zip_dir = if defined(zip_file) then basename(select_first([zip_file]), ".zip") else None
-  String analysis_name = if defined(set_analysis_name) then set_analysis_name else "AxiomGT1"
+  String analysis_name = select_first([set_analysis_name, "AxiomGT1"])
 
   command <<<
     set -euo pipefail
@@ -1195,7 +1199,7 @@ task cel2affy {
       ~{if defined(read_models_brlmmp) then "--read-models-brlmmp \"" + basename(select_first([read_models_brlmmp])) + "\"" else ""} \
       --write-models \
       ~{if defined(target_sketch) then "--target-sketch \"" + basename(select_first([target_sketch])) + "\"" else ""} \
-      ~{if defined(set_analysis_name) then "--set-analysis-name " + set_analysis_name else ""} \
+      ~{if defined(set_analysis_name) then "--set-analysis-name " + analysis_name else ""} \
       ~{if defined(set_gender_method) then "--set-gender-method " + set_gender_method else ""} \
       ~{if defined(em_gender) then "--em-gender " + em_gender else ""} \
       ~{if defined(female_thresh) then "--female-thresh " + female_thresh else ""} \
@@ -1302,7 +1306,7 @@ task gtc2vcf {
       --output-type b \
       --check-ref x \
       --fasta-ref "~{basename(ref_fasta)}" \
-      ~{if cpu > 1 then " --threads " + (cpu - 1) else ""} \
+      ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
       --write-index
     bcftools query --list-samples "~{filebase}.bcf" | tee "~{filebase}.sample_id.lines" | wc -l
     rm "~{basename(bpm_file, ".gz")}"
@@ -1489,7 +1493,7 @@ task txt2vcf {
       --output-type b \
       --check-ref x \
       --fasta-ref "~{basename(ref_fasta)}" \
-      ~{if cpu > 1 then " --threads " + (cpu - 1) else ""} \
+      ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \
       --write-index
     bcftools query --list-samples "~{filebase}.bcf" | tee "~{filebase}.sample_id.lines" | wc -l
     echo "~{sep("\n", select_all([csv_file, ref_fasta, ref_fasta_fai, calls_file, confidences_file, summary_file, snp_file, sam_file, reheader_file]))}" | \
@@ -1518,7 +1522,7 @@ task ref_scatter {
   input {
     Array[String]+ chrs
     Array[String]+ lens
-    File genetic_map_file
+    File? genetic_map_file
     Float max_win_size_cm
     Float overlap_size_cm
 
@@ -1532,7 +1536,7 @@ task ref_scatter {
 
   command <<<
     set -euo pipefail
-    mv "~{genetic_map_file}" .
+    ~{if defined(genetic_map_file) then "mv \"" +  select_first([genetic_map_file]) + "\" ." else ""}
     chrs=~{write_lines(chrs)}
     lens=~{write_lines(lens)}
     paste -d $'\t' $chrs $lens > chr2len.tsv
@@ -1543,7 +1547,10 @@ task ref_scatter {
       for line in f:
         (key, val) = line.split('\t')
         chr2len[key] = int(val)
-    df_map = pd.read_csv('~{basename(genetic_map_file)}', delim_whitespace = True, header = 0, names = ['CHR', 'POS' ,'RATE', 'CM'])
+    ~{if defined(genetic_map_file) then
+      "df_map = pd.read_csv('" + basename(select_first([genetic_map_file])) + "', sep='\\\\s+', header = 0, names = ['CHR', 'POS' ,'RATE', 'CM'])"
+    else
+      "df_map = pd.DataFrame({'CHR': list(chr2len.keys()) * 2, 'POS': [0] * len(chr2len) + list(chr2len.values()), 'RATE': 1.0, 'CM': [0] * len(chr2len) + [len / 1e6 for len in chr2len.values()]})"}
     df_out = {}
     for chr, df_group in df_map.groupby('CHR'):
       fai_chr = str(chr) if str(chr) in chr2len else 'chr' + str(chr) if 'chr' + str(chr) in chr2len else 'X' if 'X' in chr2len else 'chrX' if 'chrX' in chr2len else None
@@ -1562,8 +1569,7 @@ task ref_scatter {
     df = pd.concat([df_out[fai_chr] for fai_chr in chr2len.keys()])
     df[['CHR', 'BEG', 'END', 'BEG2', 'END2']].to_csv('ref_scatter.tsv', sep='\t', header = False, index = False)
     CODE
-    rm chr2len.tsv
-    rm "~{basename(genetic_map_file)}"
+    rm chr2len.tsv~{if defined(genetic_map_file) then " \"" +  basename(select_first([genetic_map_file])) + "\"" else ""}
   >>>
 
   output {
@@ -1800,8 +1806,8 @@ task vcf_shapeit5 {
     Int n_markers
     File unphased_vcf_file
     File unphased_vcf_idx
-    File genetic_map_file
-    Int n_chrs
+    File? genetic_map_file
+    Int n_x_chr
     File? pedigree_file
     File? sample_tsv_file
     Int? n_panel_smpls
@@ -1833,15 +1839,14 @@ task vcf_shapeit5 {
   Int preemptible = select_first([preemptible_override, if mhc then 0 else 1]) # as the MHC phases slowly, do not run as preemptible
 
   String filebase = basename(basename(unphased_vcf_file, ".bcf"), ".vcf.gz")
-  String dollar = "$"
 
   command <<<
     set -euo pipefail
     echo "~{sep("\n", select_all([unphased_vcf_file, unphased_vcf_idx, genetic_map_file, pedigree_file, sample_tsv_file, ref_vcf_file, ref_vcf_idx]))}" | \
       tr '\n' '\0' | xargs -0 mv -t .
     ~{if defined(ref_fasta_fai) then "mv \"" + select_first([ref_fasta_fai]) + "\" ." else ""}
-    chr=~{chr}; zcat "~{basename(genetic_map_file)}" | \
-      sed 's/^~{n_chrs}/X/' | awk -v chr=${chr#chr} '$1==chr {print $2,$3,$4}' > genetic_map.txt
+    ~{if defined(genetic_map_file) then "chr=" + chr + "; zcat \"" + basename(select_first([genetic_map_file])) + "\" | \\\n" +
+    "  sed 's/^" + n_x_chr + "/X/' | awk -v chr=$" + "{chr#chr} '$1==chr {print $2,$3,$4}' > genetic_map.txt"  else ""}
     ~{if defined(sample_tsv_file) then
     "awk -F\"\t\" 'NR==1 {for (i=1; i<=NF; i++) f[$i] = i}\n" +
     "  NR>1 && $(f[\"computed_gender\"])==\"M\" {print $(f[\"sample_id\"])}' \\\n" +
@@ -1851,7 +1856,7 @@ task vcf_shapeit5 {
       ~{if cpu > 1 then "--thread " + cpu else ""} \
       --input "~{basename(unphased_vcf_file)}" \
       ~{if defined(ref_vcf_file) then "--reference \"" + basename(select_first([ref_vcf_file])) + "\"" else ""} \
-      --map genetic_map.txt \
+      ~{if defined(genetic_map_file) then "--map genetic_map.txt" else ""} \
       ~{if defined(pedigree_file) then "--pedigree \"" + basename(select_first([pedigree_file])) + "\"" else ""} \
       ~{if defined(sample_tsv_file) then "--haploids \"" + filebase + ".haploids.lines\"" else ""} \
       --region ~{scaffold_region} \
@@ -1864,7 +1869,7 @@ task vcf_shapeit5 {
       (if cpu > 1 then "  --thread " + cpu + " \\\n" else "") +
       "  --input \"" + basename(unphased_vcf_file) + "\" \\\n" +
       "  --scaffold \"" + filebase + ".scaffold.bcf\" \\\n" +
-      "  --map genetic_map.txt \\\n" +
+      (if defined(genetic_map_file) then "  --map genetic_map.txt \\\n" else "") +
       (if defined(pedigree_file) then "  --pedigree \"" + basename(select_first([pedigree_file])) + "\" \\\n" else "") +
       (if defined(sample_tsv_file) then "--haploids \"" + filebase + ".haploids.lines\" \\\n" else "") +
       "  --input-region " + input_region + " \\\n" +
@@ -1872,7 +1877,9 @@ task vcf_shapeit5 {
       "  --output \"" + filebase + ".pgt.bcf\" \\\n" +
       "1>&2\n" +
       "rm \"" + filebase + ".scaffold.bcf\"\n"
-    else ""}rm genetic_map.txt~{if defined(sample_tsv_file) then " \"" + filebase + ".haploids.lines\"" else ""}
+    else ""}
+    ~{if defined(genetic_map_file) then "rm genetic_map.txt" else ""}
+    ~{if defined(sample_tsv_file) then "rm \"" + filebase + ".haploids.lines\"" else ""}
     ~{if defined(ref_fasta_fai) then
       "(echo -en \"##fileformat=VCFv4.2\\n#CHROM\\tPOS\\tID\\tREF\\tALT\\tQUAL\\tFILTER\\tINFO\\tFORMAT\\t\"\n" +
       "bcftools query -l \"" + filebase + ".pgt.bcf\" | tr '\\n' '\\t' | sed 's/\\t$/\\n/') > tmp.vcf\n" +
@@ -2186,6 +2193,7 @@ task vcf_mocha {
     File? xcl_vcf_file
     File? xcl_vcf_idx
     File? cnp_file
+    File? fra_file
     String? mhc_reg
     String? kir_reg
     String? mocha_extra_args
@@ -2221,6 +2229,7 @@ task vcf_mocha {
       ~{if defined(sample_tsv_file) then "--input-stats \"" + basename(select_first([sample_tsv_file])) + "\"" else ""} \
       ~{if defined(xcl_vcf_file) then "--variants \"^" + basename(select_first([xcl_vcf_file])) + "\"" else ""} \
       ~{if defined(cnp_file) then "--cnp \"" + basename(select_first([cnp_file])) + "\"" else ""} \
+      ~{if defined(fra_file) then "--fra \"" + basename(select_first([fra_file])) + "\"" else ""} \
       ~{if defined(mhc_reg) then "--mhc \"" + mhc_reg + "\"" else ""} \
       ~{if defined(kir_reg) then "--kir \"" + kir_reg + "\"" else ""} \
       ~{if cpu > 1 then "--threads " + (cpu - 1) else ""} \

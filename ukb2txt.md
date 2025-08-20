@@ -41,7 +41,7 @@ If you want to run this conversion through Cromwell, you can skip the sections b
   "ukb2txt.int_path": "gs://fc-9a7c5487-04c9-4182-b3ec-13de7f6b409b/genotype"
 }
 ```
-Where `sqc_path`, `cal_path`, and `int_path` are, respectively, the paths where the private resources `ukb_sqc_v2.txt`, `ukb_cal_chr{{1..22},X,Y,XY,MT}_v2.bed`, and `ukb_int_chr{{1..22},X,Y,XY,MT}_v2.bin` are localized
+Where `sqc_path`, `cal_path`, and `int_path` are, respectively, the paths where the private resources `ukb_sqc_v2.txt`, `ukb_cal_chr{{1..22},X,Y,XY,MT}_v2.bed`, and `ukb_int_chr{{1..22},X,Y,XY,MT}_v2.bin` are localized. Make sure the resources are not corrupted. Genotype `.bed` files and intensity `.bin` files should have the MD5 checksums listed [here](http://biobank.ndph.ox.ac.uk/ukb/refer.cgi?id=998) and sample tracker `ukb_sqc_v2.txt` should have MD5 checksum `d5b117126550af5b692a898a29dd71c4`
 
 To minimize network operations between storage nodes and compute nodes, chromosome and batch files for genotypes and intensities are processed on separate nodes, with the intensity file for chromosome 1 being the largest file localized to a single node (231 GiB). We advise to make sure you run the computation in the same computing location where the anonymized data files are stored to optimize latency and network bandwidth and avoid [egress costs](http://cloud.google.com/storage/pricing), as genotype and intensity files comprise 3.0 TiB of data. If this recommendation is followed, then running this conversion pipeline should take approximately half a day and cost $5-10 (mostly due to gzip compression). The output will consist of 2.4 TiB of gzip-compressed files split by batches
 

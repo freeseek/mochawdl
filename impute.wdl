@@ -1,15 +1,15 @@
 version development
 
-## Copyright (c) 2021-2024 Giulio Genovese
+## Copyright (c) 2021-2025 Giulio Genovese
 ##
-## Version 2024-09-27
+## Version 2025-08-19
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs impute5 or beagle5 on a set of VCFs
 ##
 ## Cromwell version support
-## - Successfully tested on v87
+## - Successfully tested on v90
 ##
 ## Distributed under terms of the MIT License
 
@@ -18,7 +18,7 @@ struct Reference {
   Int min_chr_len
   Int n_x_chr
   String? mhc_reg
-  File genetic_map_file
+  File? genetic_map_file
   String panel_pfx
   String panel_sfx
   String panel_idx
@@ -60,9 +60,9 @@ workflow impute {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.20-20240927"
-    String impute5_docker = "impute5:1.20-20240927"
-    String beagle5_docker = "beagle5:1.20-20240927"
+    String bcftools_docker = "bcftools:1.22-20250819"
+    String impute5_docker = "impute5:1.22-20250819"
+    String beagle5_docker = "beagle5:1.22-20250819"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -99,7 +99,7 @@ workflow impute {
   Array[Array[String]] ref_fasta_fai_tbl = transpose(read_tsv(ref.fasta_fai))
   scatter (idx in range(length(ref_fasta_fai_tbl[0]))) {
     Int fai_len = ref_fasta_fai_tbl[1][idx]
-    if (fai_len > ref.min_chr_len && ref_fasta_fai_tbl[0][idx] != "Y" && ref_fasta_fai_tbl[0][idx] != "chrY") {
+    if (fai_len > ref.min_chr_len && ref_fasta_fai_tbl[0][idx] != "Y" && sub(ref_fasta_fai_tbl[0][idx], "^chrY", "") == ref_fasta_fai_tbl[0][idx]) {
       String ref_chrs = ref_fasta_fai_tbl[0][idx]
     }
   }
@@ -393,7 +393,7 @@ task ref_scatter {
   input {
     Array[String]+ chrs
     Array[String]+ lens
-    File genetic_map_file
+    File? genetic_map_file
     Float max_win_size_cm
     Float overlap_size_cm
 
@@ -407,7 +407,7 @@ task ref_scatter {
 
   command <<<
     set -euo pipefail
-    mv "~{genetic_map_file}" .
+    ~{if defined(genetic_map_file) then "mv \"" +  select_first([genetic_map_file]) + "\" ." else ""}
     chrs=~{write_lines(chrs)}
     lens=~{write_lines(lens)}
     paste -d $'\t' $chrs $lens > chr2len.tsv
@@ -418,7 +418,10 @@ task ref_scatter {
       for line in f:
         (key, val) = line.split('\t')
         chr2len[key] = int(val)
-    df_map = pd.read_csv('~{basename(genetic_map_file)}', delim_whitespace = True, header = 0, names = ['CHR', 'POS' ,'RATE', 'CM'])
+    ~{if defined(genetic_map_file) then
+      "df_map = pd.read_csv('" + basename(select_first([genetic_map_file])) + "', sep='\\\\s+', header = 0, names = ['CHR', 'POS' ,'RATE', 'CM'])"
+    else
+      "df_map = pd.DataFrame({'CHR': list(chr2len.keys()) * 2, 'POS': [0] * len(chr2len) + list(chr2len.values()), 'RATE': 1.0, 'CM': [0] * len(chr2len) + [len / 1e6 for len in chr2len.values()]})"}
     df_out = {}
     for chr, df_group in df_map.groupby('CHR'):
       fai_chr = str(chr) if str(chr) in chr2len else 'chr' + str(chr) if 'chr' + str(chr) in chr2len else 'X' if 'X' in chr2len else 'chrX' if 'chrX' in chr2len else None
@@ -437,8 +440,7 @@ task ref_scatter {
     df = pd.concat([df_out[fai_chr] for fai_chr in chr2len.keys()])
     df[['CHR', 'BEG', 'END', 'BEG2', 'END2']].to_csv('ref_scatter.tsv', sep='\t', header = False, index = False)
     CODE
-    rm chr2len.tsv
-    rm "~{basename(genetic_map_file)}"
+    rm chr2len.tsv~{if defined(genetic_map_file) then " \"" +  basename(select_first([genetic_map_file])) + "\"" else ""}
   >>>
 
   output {
@@ -606,7 +608,7 @@ task vcf_beagle5 {
     Int n_smpls
     Int n_markers
     File pgt_file
-    File genetic_map_file
+    File? genetic_map_file
     Int n_x_chr
     Int n_panel_smpls
     Int n_panel_markers
@@ -665,14 +667,14 @@ task vcf_beagle5 {
         --output-type z \
         --output "~{filebase}.vcf.gz" \
         "~{basename(pgt_file)}"
-      chr=~{chr}; zcat "~{basename(genetic_map_file)}" | \
-        sed 's/^~{n_x_chr}/X/' | awk -v chr=$chr '$1==chr || "chr"$1==chr {print chr,".",$4,$2}' > genetic_map.txt
+      ~{if defined(genetic_map_file) then "chr=" + chr + "; zcat \"" + basename(select_first([genetic_map_file])) + "\" | \\\n" +
+      "  sed 's/^" + n_x_chr + "/X/' | awk -v chr=$" + "{chr#chr} '$1==chr || \"chr\"$1==chr {print chr,\".\",$4,$2}' > genetic_map.txt"  else ""}
       java -XX:MaxRAMPercentage=~{max_ram_percentage} \
         -jar /usr/share/beagle/beagle.jar \
         gt="~{filebase}.vcf.gz" \
         ref="~{basename(panel_bref3_file)}" \
         out="~{filebase}.imp" \
-        map=genetic_map.txt \
+        ~{if defined(genetic_map_file) then "map=genetic_map.txt" else ""} \
         chrom=~{buffer_region} \
         ~{if cpu > 1 then "nthreads=" + cpu else ""} \
         ~{if out_ap then "ap=true" else ""} \
@@ -717,7 +719,7 @@ task vcf_beagle5 {
     ~{if (out_ds && !defined(ref_fasta_fai)) then
       "bcftools index --force \"" + filebase + ".imp.bcf\""
     else ""}
-    rm "~{basename(pgt_file)}.csi" genetic_map.txt
+    rm "~{basename(pgt_file)}.csi"~{if defined(genetic_map_file) then " genetic_map.txt" else ""}
     echo "~{sep("\n", select_all([pgt_file, genetic_map_file, panel_bcf_file, panel_csi_file, panel_bref3_file]))}" | \
       sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm
   >>>
@@ -798,7 +800,7 @@ task vcf_impute5 {
     Int n_markers
     File pgt_file
     Int n_x_chr
-    File genetic_map_file
+    File? genetic_map_file
     Int n_panel_smpls
     Int n_panel_markers_common
     Int n_panel_markers_total
@@ -855,12 +857,12 @@ task vcf_impute5 {
     else
       if [ $n_markers -le ~{min_markers} ]; then opt="--Kpbwt ~{low_markers_kpbwt}"; else opt=""; fi
       mkdir logs
-      chr=~{chr}; zcat "~{basename(genetic_map_file)}" | \
-      sed 's/^~{n_x_chr}/X/' | awk -v chr=$chr -v OFS="\\t" 'BEGIN {print "pos","chr","cM"}
-        $1==chr || "chr"$1==chr {print $2,chr,$4}' > genetic_map.txt
+      ~{if defined(genetic_map_file) then "chr=" + chr + "; zcat \"" + basename(select_first([genetic_map_file])) + "\" | \\\n" +
+      "  sed 's/^" + n_x_chr + "/X/' | awk -v chr=$" + "{chr#chr} -v OFS=\"\\\\t\" 'BEGIN {print \"pos\",\"chr\",\"cM\"}\n" +
+      "  $1==chr {print $2,$3,$4}' > genetic_map.txt"  else ""}
       impute5 \
         --h "~{basename(panel_bcf_file)}" \
-        --m genetic_map.txt \
+        ~{if defined(genetic_map_file) then "  --m genetic_map.txt" else ""} \
         --g "~{basename(pgt_file)}" \
         --r ~{region} \
         --buffer-region ~{buffer_region} \
@@ -874,7 +876,7 @@ task vcf_impute5 {
         ~{if defined(impute_extra_args) then impute_extra_args else ""} \
         $opt \
         1>&2
-      rm "~{basename(pgt_file)}.csi" genetic_map.txt
+      rm "~{basename(pgt_file)}.csi"~{if defined(genetic_map_file) then " genetic_map.txt" else ""}
     fi
     echo "~{sep("\n", select_all([pgt_file, genetic_map_file, panel_fam_file, panel_bcf_file, panel_csi_file, panel_bin_file]))}" | \
       sed 's/^.*\///' | tr '\n' '\0' | xargs -0 rm

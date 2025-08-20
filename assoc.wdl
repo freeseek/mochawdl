@@ -1,15 +1,15 @@
 version development
 
-## Copyright (c) 2021-2024 Giulio Genovese
+## Copyright (c) 2021-2025 Giulio Genovese
 ##
-## Version 2024-09-27
+## Version 2025-08-19
 ##
 ## Contact Giulio Genovese <giulio.genovese@gmail.com>
 ##
 ## This WDL workflow runs association analyses with REGENIE and PLINK2
 ##
 ## Cromwell version support
-## - Successfully tested on v87
+## - Successfully tested on v90
 ##
 ## Distributed under terms of the MIT License
 
@@ -21,7 +21,7 @@ struct Reference {
   Int? par_bp1
   Int? par_bp2
   File? cyto_file
-  File genetic_map_file
+  File? genetic_map_file
   String? pca_exclusion_regions
   File? gff3_file # http://ftp.ensembl.org/pub/current_gff3/homo_sapiens/
   File? rsid_vcf_file # http://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/
@@ -93,9 +93,9 @@ workflow assoc {
     String basic_bash_docker = "debian:stable-slim"
     String pandas_docker = "amancevice/pandas:slim"
     String docker_repository = "us.gcr.io/mccarroll-mocha"
-    String bcftools_docker = "bcftools:1.20-20240927"
-    String regenie_docker = "regenie:1.20-20240927"
-    String r_mocha_docker = "r_mocha:1.20-20240927"
+    String bcftools_docker = "bcftools:1.22-20250819"
+    String regenie_docker = "regenie:1.22-20250819"
+    String r_mocha_docker = "r_mocha:1.22-20250819"
   }
 
   String docker_repository_with_sep = docker_repository + if docker_repository != "" && docker_repository == sub(docker_repository, "/$", "") then "/" else ""
@@ -121,7 +121,7 @@ workflow assoc {
   Array[Array[String]] ref_fasta_fai_tbl = transpose(read_tsv(ref.fasta_fai))
   scatter (idx in range(length(ref_fasta_fai_tbl[0]))) {
     Int fai_len = ref_fasta_fai_tbl[1][idx]
-    if (fai_len > ref.min_chr_len && ref_fasta_fai_tbl[0][idx] != "Y" && ref_fasta_fai_tbl[0][idx] != "chrY") {
+    if (fai_len > ref.min_chr_len && ref_fasta_fai_tbl[0][idx] != "Y" && sub(ref_fasta_fai_tbl[0][idx], "^chrY", "") == ref_fasta_fai_tbl[0][idx]) {
       String chrs = ref_fasta_fai_tbl[0][idx]
       Int lens = ref_fasta_fai_tbl[1][idx]
     }
@@ -691,7 +691,7 @@ task ref_scatter {
   input {
     Array[String]+ chrs
     Array[String]+ lens
-    File genetic_map_file
+    File? genetic_map_file
     Float max_win_size_cm
     Float overlap_size_cm
     Boolean genetic_map_order
@@ -706,7 +706,7 @@ task ref_scatter {
 
   command <<<
     set -euo pipefail
-    mv "~{genetic_map_file}" .
+    ~{if defined(genetic_map_file) then "mv \"" +  select_first([genetic_map_file]) + "\" ." else ""}
     chrs=~{write_lines(chrs)}
     lens=~{write_lines(lens)}
     paste -d $'\t' $chrs $lens > chr2len.tsv
@@ -717,7 +717,10 @@ task ref_scatter {
       for line in f:
         (key, val) = line.split('\t')
         chr2len[key] = int(val)
-    df_map = pd.read_csv('~{basename(genetic_map_file)}', delim_whitespace = True, header = 0, names = ['CHR', 'POS' ,'RATE', 'CM'])
+    ~{if defined(genetic_map_file) then
+      "df_map = pd.read_csv('" + basename(select_first([genetic_map_file])) + "', sep='\\\\s+', header = 0, names = ['CHR', 'POS' ,'RATE', 'CM'])"
+    else
+      "df_map = pd.DataFrame({'CHR': list(chr2len.keys()) * 2, 'POS': [0] * len(chr2len) + list(chr2len.values()), 'RATE': 1.0, 'CM': [0] * len(chr2len) + [len / 1e6 for len in chr2len.values()]})"}
     df_out = {}
     for chr, df_group in df_map.groupby('CHR'):
       fai_chr = str(chr) if str(chr) in chr2len else 'chr' + str(chr) if 'chr' + str(chr) in chr2len else 'X' if 'X' in chr2len else 'chrX' if 'chrX' in chr2len else None
@@ -733,8 +736,7 @@ task ref_scatter {
     df = pd.concat(~{if genetic_map_order then "df_out" else "[df_out[fai_chr] for fai_chr in chr2len.keys()]"})
     df[['CHR', 'BEG', 'END']].to_csv('ref_scatter.bed', sep='\t', header = False, index = False)
     CODE
-    rm chr2len.tsv
-    rm "~{basename(genetic_map_file)}"
+    rm chr2len.tsv~{if defined(genetic_map_file) then " \"" +  basename(select_first([genetic_map_file])) + "\"" else ""}
   >>>
 
   output {
